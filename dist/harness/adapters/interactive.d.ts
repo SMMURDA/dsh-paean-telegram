@@ -140,6 +140,12 @@ export interface Interactive {
     setAllowedTools(tools: readonly string[]): void;
     toggleQuestionOption(chatId: number, id: number, questionId: string, optionId: string): Promise<boolean>;
     setQuestionCustom(chatId: number, id: number, questionId: string, text: string): Promise<boolean>;
+    /** Stage free text for one question by index and settle the card in the same
+     * call when that question carries no options: a text-only question has nothing
+     * left to choose, so demanding a separate Submit tap left the tool call — and
+     * the whole turn — waiting until the operator aborted it. `staged` means the
+     * card is still open (an option-bearing question, or an unanswered sibling). */
+    answerQuestionText(chatId: number, id: number, questionIndex: number, text: string): Promise<"submitted" | "staged" | "stale">;
     submitQuestions(chatId: number, id: number): Promise<boolean>;
     cancelQuestions(chatId: number, id: number): Promise<boolean>;
     detach(): void;

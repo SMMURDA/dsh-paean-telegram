@@ -550,6 +550,65 @@ test('telegram ownership answers ask_user_question at tools/execute when the web
   interactive.detach();
 });
 
+test('telegram ownership still answers at tools/execute when this host mounts no userQuestions service', async () => {
+  const delivery = fakeDelivery();
+  delivery.chatForSession = (sessionId) => (sessionId === 's-owner' ? 555 : undefined);
+  const events = fakeEvents();
+  const liveAgent = { id: 's-owner' };
+  const ctx = {
+    get: (name) => {
+      // The 0.2.x host reads services at apply time: a service mounted later,
+      // or a release without this one, is simply absent here.
+      if (name === 'agents') return { get: (id) => (id === 's-owner' ? liveAgent : undefined), roots: () => [liveAgent] };
+      return undefined;
+    },
+    on: events.on.bind(events),
+  };
+  const logs = [];
+  const interactive = attachInteractive(ctx, delivery, { userQuestions: 'telegram', log: (message) => logs.push(message) });
+  const listener = events.listeners.get('tools/execute');
+  assert.equal(typeof listener, 'function', 'the service-independent seam is installed without a userQuestions service');
+  const answerPromise = listener(
+    {
+      name: 'ask_user_question',
+      arguments: { questions: [{ id: 'q1', question: 'Pick', options: [{ label: 'One' }] }] },
+      agent: liveAgent,
+    },
+    () => { throw new Error('the tool body must not run when Telegram answers'); },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  const prompt = delivery.sent.find((entry) => entry.text?.startsWith('❓ Session s-owner asks'));
+  assert.ok(prompt, 'question card reaches the Telegram chat');
+  assert.equal(prompt.chatId, 555);
+  const id = Number(prompt.keyboard.inline_keyboard[0][0].callback_data.split(':')[1]);
+  await interactive.toggleQuestionOption(555, id, 'q1', '0');
+  await interactive.submitQuestions(555, id);
+  assert.deepEqual(await answerPromise, { value: { answers: [{ id: 'q1', selected: ['One'] }] } });
+  assert.ok(logs.some((line) => line.includes('no userQuestions service is available')), 'the fallback reason is logged');
+  interactive.detach();
+});
+
+test('an older userQuestions service without registerProvider falls back to the tools/execute seam', async () => {
+  const delivery = fakeDelivery();
+  delivery.chatForSession = () => 555;
+  const events = fakeEvents();
+  const liveAgent = { id: 's-owner' };
+  const ctx = {
+    get: (name) => {
+      // Shape seen on a host whose service predates registerProvider.
+      if (name === 'userQuestions') return { ask: async () => ({ answers: [] }) };
+      if (name === 'agents') return { get: (id) => (id === 's-owner' ? liveAgent : undefined), roots: () => [liveAgent] };
+      return undefined;
+    },
+    on: events.on.bind(events),
+  };
+  const logs = [];
+  const interactive = attachInteractive(ctx, delivery, { userQuestions: 'telegram', log: (message) => logs.push(message) });
+  assert.equal(typeof events.listeners.get('tools/execute'), 'function', 'the unusable provider seam does not disable the bridge');
+  assert.ok(logs.some((line) => line.includes('exposes no registerProvider')), 'the incompatible service is reported');
+  interactive.detach();
+});
+
 test('web ownership yields the provider seam and installs no tools/execute interception', () => {
   const delivery = fakeDelivery();
   const events = fakeEvents();
@@ -1283,4 +1342,127 @@ test('SYNC-1 scoped goal grant responds allowed-once immediately without broadca
   assert.equal(api.responded.length, 2, 'first answer and the grant auto-response are both sent');
   assert.deepEqual(api.responded[1].result.value, { sessionId: 's1', approvalId: 'app-g2', outcome: 'allowed-once' });
   interactive.detach();
+});
+
+// --- QX: `/answer` settles a text-only question ------------------------------
+// A question with no options has nothing left to choose, so one command must
+// settle it. Before this, `/answer` only staged the text and the tool call kept
+// waiting for a Submit tap the operator had no reason to expect — the turn then
+// looked hung until they aborted it (ASK_ABORTED in the transcript).
+
+/** Pending id of the first delivered question card, read from its Submit row.
+ * A text-only card has no option rows, so its first button is Submit. */
+function pendingIdFromCard(delivery) {
+  return Number(delivery.sent.find((entry) => entry.keyboard?.inline_keyboard)?.keyboard.inline_keyboard[0][0].callback_data.split(':')[1]);
+}
+
+test('QX: /answer submits a text-only question without a Submit tap', async () => {
+  const delivery = fakeDelivery();
+  const { ctx, ask } = providerCtx();
+  const interactive = attachInteractive(ctx, delivery);
+  const promise = ask(questionRequest('s1', [{ id: 'q1', question: 'Ketik satu kalimat apa saja' }]));
+  await waitTicks(2);
+
+  const id = pendingIdFromCard(delivery);
+  assert.equal(await interactive.answerQuestionText(111, id, 0, 'tes teks berhasil'), 'submitted');
+  const result = await promise;
+  assert.deepEqual(result.answers, [{ id: 'q1', selected: [], custom: 'tes teks berhasil' }], 'the typed text is the answer');
+  assert.equal(questionIdAt(id, 0), undefined, 'the card settled instead of waiting for Submit');
+  interactive.detach();
+});
+
+test('QX: /answer on an option question stages and still waits for Submit', async () => {
+  const delivery = fakeDelivery();
+  const { ctx, ask } = providerCtx();
+  const interactive = attachInteractive(ctx, delivery);
+  const promise = ask(questionRequest('s1', [{ id: 'q1', question: 'Pick', options: [{ label: 'One' }] }]));
+  await waitTicks(2);
+
+  const id = pendingIdFromCard(delivery);
+  assert.equal(await interactive.answerQuestionText(111, id, 0, 'custom text'), 'staged', 'an option question needs its Submit tap');
+  assert.equal(questionIdAt(id, 0), 'q1', 'the card stays pending');
+  assert.equal(await interactive.submitQuestions(111, id), true);
+  const result = await promise;
+  assert.deepEqual(result.answers, [{ id: 'q1', selected: [], custom: 'custom text' }], 'the staged text survives the Submit');
+  interactive.detach();
+});
+
+test('QX: /answer on a text-only question with an unanswered sibling stays staged', async () => {
+  const delivery = fakeDelivery();
+  const { ctx, ask } = providerCtx();
+  const interactive = attachInteractive(ctx, delivery);
+  const promise = ask(
+    questionRequest('s1', [
+      { id: 'q1', question: 'Ketik satu kalimat' },
+      { id: 'q2', question: 'Pick', options: [{ label: 'One' }] },
+    ]),
+  );
+  promise.catch(() => {});
+  await waitTicks(2);
+
+  const id = pendingIdFromCard(delivery);
+  assert.equal(await interactive.answerQuestionText(111, id, 0, 'teks'), 'staged', 'the option question is still unanswered');
+  assert.equal(questionIdAt(id, 0), 'q1', 'the card stays pending');
+  assert.equal(await interactive.toggleQuestionOption(111, id, 'q2', '0'), true);
+  assert.equal(await interactive.submitQuestions(111, id), true);
+  const result = await promise;
+  assert.deepEqual(result.answers, [
+    { id: 'q1', selected: [], custom: 'teks' },
+    { id: 'q2', selected: ['One'] },
+  ]);
+  interactive.detach();
+});
+
+test('QX: /answer from a foreign chat or with a bad index changes nothing', async () => {
+  const delivery = fakeDelivery();
+  delivery.chatForSession = (sessionId) => (sessionId === 's-owner' ? 555 : undefined);
+  const { ctx, ask } = providerCtx();
+  const interactive = attachInteractive(ctx, delivery);
+  const promise = ask(questionRequest('s-owner', [{ id: 'q1', question: 'Ketik satu kalimat' }]));
+  await waitTicks(2);
+
+  const id = pendingIdFromCard(delivery);
+  assert.equal(await interactive.answerQuestionText(999, id, 0, 'x'), 'stale', 'a foreign chat cannot answer');
+  assert.equal(await interactive.answerQuestionText(555, id, 9, 'x'), 'stale', 'an out-of-range index cannot answer');
+  assert.equal(questionIdAt(id, 0), 'q1', 'neither attempt touched the pending question');
+
+  // Pre-existing semantics kept by the shared settle helper: Submit with
+  // nothing typed on a text-only card is the blank "skip" answer.
+  assert.equal(await interactive.submitQuestions(555, id), true);
+  const result = await promise;
+  assert.deepEqual(result.answers, [{ id: 'q1', selected: [] }], 'an empty Submit still settles as a skip');
+  interactive.detach();
+});
+
+test('QX: Submit on an unanswered option question warns and keeps the card', async () => {
+  const delivery = fakeDelivery();
+  const { ctx, ask } = providerCtx();
+  const interactive = attachInteractive(ctx, delivery);
+  const promise = ask(questionRequest('s1', [{ id: 'q1', question: 'Pick', options: [{ label: 'One' }] }]));
+  promise.catch(() => {});
+  await waitTicks(2);
+
+  const id = pendingIdFromCard(delivery);
+  assert.equal(await interactive.submitQuestions(111, id), true);
+  assert.equal(questionIdAt(id, 0), 'q1', 'the card stays pending');
+  assert.ok(
+    delivery.sent.some((entry) => entry.edit && /Answer every question first/.test(entry.edit.text)),
+    'the warning is rendered on the card',
+  );
+  assert.equal(await interactive.toggleQuestionOption(111, id, 'q1', '0'), true);
+  assert.equal(await interactive.submitQuestions(111, id), true);
+  const result = await promise;
+  assert.deepEqual(result.answers, [{ id: 'q1', selected: ['One'] }]);
+  interactive.detach();
+});
+
+test('QX: the text-only hint promises the single /answer step', () => {
+  const pending = {
+    id: 7,
+    sessionId: 's1',
+    questions: [{ id: 'q2', question: 'Why?' }],
+    selections: new Map([['q2', []]]),
+    custom: new Map(),
+  };
+  assert.match(renderQuestions(pending, 0), /\/answer <id> <question-number> <text> — it submits by itself/);
 });

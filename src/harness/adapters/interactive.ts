@@ -234,6 +234,12 @@ export interface Interactive {
   setAllowedTools(tools: readonly string[]): void;
   toggleQuestionOption(chatId: number, id: number, questionId: string, optionId: string): Promise<boolean>;
   setQuestionCustom(chatId: number, id: number, questionId: string, text: string): Promise<boolean>;
+  /** Stage free text for one question by index and settle the card in the same
+   * call when that question carries no options: a text-only question has nothing
+   * left to choose, so demanding a separate Submit tap left the tool call — and
+   * the whole turn — waiting until the operator aborted it. `staged` means the
+   * card is still open (an option-bearing question, or an unanswered sibling). */
+  answerQuestionText(chatId: number, id: number, questionIndex: number, text: string): Promise<"submitted" | "staged" | "stale">;
   submitQuestions(chatId: number, id: number): Promise<boolean>;
   cancelQuestions(chatId: number, id: number): Promise<boolean>;
   detach(): void;
@@ -277,6 +283,24 @@ async function reRenderQuestion(ctx: Context, pending: PendingQuestion, chatId: 
   const text = renderQuestions(pending, chatId);
   await delivery.edit(chatId, messageId, text, questionKeyboard(pending.id, chatId)).catch(() => {});
   void ctx;
+}
+
+/** Resolve one pending card once every question carries an answer: a question
+ * with options needs a selection or staged custom text, a text-only question
+ * needs nothing beyond what staging already did. Returns false while a sibling
+ * question is still unanswered, leaving the card pending for a later Submit. */
+function settleQuestionCard(pending: PendingQuestion, id: number): boolean {
+  const answers: { id: string; selected: string[]; custom?: string }[] = [];
+  for (const question of pending.questions) {
+    const selected = pending.selections.get(question.id) ?? [];
+    const custom = pending.custom.get(question.id);
+    if (selected.length === 0 && custom === undefined && question.options?.length) return false;
+    answers.push({ id: question.id, selected, ...(custom === undefined ? {} : { custom }) });
+  }
+  questions.delete(id);
+  pending.resolve({ answers });
+  void pending.card.settle(`\u2705 Questions answered (id ${id}).`);
+  return true;
 }
 
 /** Prefer the chat bound to the requesting session; fall back to the legacy
@@ -425,7 +449,11 @@ export function renderQuestions(pending: PendingQuestion, chatId: number): strin
       }
       if (question.multiSelect) lines.push("   (multi-select: tap to toggle)");
     } else {
-      lines.push(selected.length ? `   \u2705 ${selected[0]}` : "   \u25CB (reply with /answer <id> <question-number> <text>)");
+      // A text-only question needs one step, not two: `/answer` settles it on
+      // its own (see `answerQuestionText`). The old hint named only the reply
+      // command while the actual settle still waited for a Submit tap, which is
+      // exactly how an operator ends up aborting a turn that looks hung.
+      lines.push(selected.length ? `   \u2705 ${selected[0]}` : "   \u25CB (reply with /answer <id> <question-number> <text> \u2014 it submits by itself)");
     }
     if (custom) lines.push(`   \u270F custom: ${custom}`);
     void chatId;
@@ -791,6 +819,12 @@ export function attachInteractive(ctx: Context, delivery: InteractiveDelivery, o
     })();
   }
 
+  if (!dual && ctx.get("approval") === undefined) {
+    // Same apply-time visibility rule as the question seam: report it instead
+    // of silently leaving every approval card to the web UI.
+    log("interactive.approval: no approval service is visible to this plugin on this host; approval cards stay with the web UI");
+  }
+
   if (!dual && ctx.get("approval") !== undefined) {
     const events = ctx as unknown as CordisEventsLike;
     disposers.push(
@@ -852,45 +886,59 @@ export function attachInteractive(ctx: Context, delivery: InteractiveDelivery, o
   let disposeProvider: (() => void) | undefined;
   const webMounted = webUiOwnsQuestions(ctx);
   const serviceOwned = questionsService?.provider !== undefined;
+  // A host may expose no usable provider seam at all: `ctx.get` is read once,
+  // at apply time, so a service mounted later is simply absent here, and an
+  // older release may ship a service without `registerProvider`. The
+  // `tools/execute` interception below needs no service, so it is the correct
+  // path in both cases instead of leaving the bridge unable to answer.
+  const providerSeamUsable = questionsService !== undefined && typeof questionsService.registerProvider === "function";
+
+  /** Install the service-independent interception: Telegram answers
+   * `ask_user_question` before the tool body and any other asker ever run. */
+  const installToolsExecuteSeam = (reason: string): void => {
+    const events = ctx as unknown as CordisEventsLike;
+    if (typeof events.on !== "function") return;
+    disposers.push(
+      events.on("tools/execute", (exec, next) => {
+        const request = toQuestionRequest(exec as ToolExecutionLike);
+        if (request === undefined) return (next as () => Promise<unknown>)();
+        assertValidRequest(ctx, request);
+        return askViaTelegram(delivery, request).then((answer) => ({ value: answer }));
+      }),
+    );
+    log(`interactive.userQuestions=telegram: ${reason}; Telegram answers ask_user_question at the tools/execute seam`);
+  };
 
   if (effectiveOwnership === "telegram") {
-    // When another UI already owns the single userQuestions provider (or the
-    // web API proxy is mounted and may claim it later), Telegram claims
-    // ask_user_question at the public `tools/execute` seam instead. The
-    // one-provider invariant stays untouched: Telegram never registers a
-    // second provider. When the seam is free, the ordinary provider path
-    // keeps the service's own validation in front of every ask.
-    if (questionsService !== undefined && (serviceOwned || webMounted)) {
-      const events = ctx as unknown as CordisEventsLike;
-      if (typeof events.on === "function") {
-        disposers.push(
-          events.on("tools/execute", (exec, next) => {
-            const request = toQuestionRequest(exec as ToolExecutionLike);
-            if (request === undefined) return (next as () => Promise<unknown>)();
-            assertValidRequest(ctx, request);
-            return askViaTelegram(delivery, request).then((answer) => ({ value: answer }));
-          }),
-        );
-      }
-      if (serviceOwned) {
-        log("interactive.userQuestions=telegram: another UI owns ctx.userQuestions; Telegram answers ask_user_question at the tools/execute seam");
-      } else {
-        log("interactive.userQuestions=telegram: web API proxy is mounted; Telegram answers ask_user_question at the tools/execute seam and leaves the single provider seam to the web UI");
-      }
-    } else if (questionsService !== undefined) {
+    // The one-provider invariant stays untouched: Telegram never registers a
+    // second provider. When the provider seam is free and usable, the ordinary
+    // provider path keeps the service's own validation in front of every ask;
+    // otherwise Telegram claims ask_user_question at the public
+    // `tools/execute` seam, whether another UI owns the service, the web API
+    // proxy is mounted, or this host has no usable service at all.
+    if (questionsService !== undefined && providerSeamUsable && !serviceOwned && !webMounted) {
       try {
         disposeProvider = questionsService.registerProvider({ ask: (request) => askViaTelegram(delivery, request) });
       } catch (err) {
-        log("telegram userQuestions provider registration failed; another provider owns the seam", err);
+        log("telegram userQuestions provider registration failed; connecting the tools/execute seam instead", err);
+        installToolsExecuteSeam("the userQuestions provider seam rejected Telegram");
       }
+    } else if (!providerSeamUsable) {
+      installToolsExecuteSeam(
+        questionsService === undefined
+          ? "no userQuestions service is available to this plugin on this host"
+          : "this host's userQuestions service exposes no registerProvider",
+      );
+    } else if (serviceOwned) {
+      installToolsExecuteSeam("another UI owns ctx.userQuestions");
     } else {
-      log("interactive.userQuestions=telegram: userQuestions service is unavailable; ask_user_question will fail if it is ever dispatched");
+      installToolsExecuteSeam("the web API proxy is mounted and keeps the single provider seam");
     }
   } else if (effectiveOwnership === "auto") {
     // Legacy inference: only register when no other provider and no enabled
     // web API proxy loader entry. The service itself enforces the
     // single-provider invariant on the attempted registration.
-    if (questionsService !== undefined && questionsService.provider === undefined && !webMounted) {
+    if (questionsService !== undefined && providerSeamUsable && questionsService.provider === undefined && !webMounted) {
       try {
         disposeProvider = questionsService.registerProvider({ ask: (request) => askViaTelegram(delivery, request) });
       } catch (err) {
@@ -975,25 +1023,36 @@ export function attachInteractive(ctx: Context, delivery: InteractiveDelivery, o
       await reRenderQuestion(ctx, pending, chatId, delivery);
       return true;
     },
+    async answerQuestionText(chatId, id, questionIndex, text) {
+      const pending = questions.get(id);
+      if (!pending) return "stale";
+      // IA-1 #3: same ownership rule as option toggles (see above).
+      if (!ownsCard(pending.card, chatId)) return "stale";
+      const question = pending.questions[questionIndex];
+      if (!question) return "stale";
+      pending.custom.set(question.id, text);
+      if (question.options?.length) {
+        // An option-bearing question still needs the operator's Submit: only
+        // that tap says the staged text is meant as this question's answer.
+        await reRenderQuestion(ctx, pending, chatId, delivery);
+        return "staged";
+      }
+      // Text-only: staging is the whole answer. An unanswered sibling option
+      // question keeps the card open, and the caller reports that instead of
+      // claiming a settled ask.
+      if (settleQuestionCard(pending, id)) return "submitted";
+      await reRenderQuestion(ctx, pending, chatId, delivery);
+      return "staged";
+    },
     async submitQuestions(chatId, id) {
       const pending = questions.get(id);
       if (!pending) return false;
       // IA-1 #3: chat B must never settle chat A's pending question —
       // settlement is bound to the chats the card was delivered to.
       if (!ownsCard(pending.card, chatId)) return false;
-      const answers: { id: string; selected: string[]; custom?: string }[] = [];
-      for (const question of pending.questions) {
-        const selected = pending.selections.get(question.id) ?? [];
-        const custom = pending.custom.get(question.id);
-        if (selected.length === 0 && custom === undefined && question.options?.length) {
-          void delivery.edit(chatId, pending.card.messageIds.get(chatId) ?? 0, `${renderQuestions(pending, chatId)}\n\n\u26A0\uFE0F Answer every question first.`, questionKeyboard(id, chatId)).catch(() => {});
-          return true;
-        }
-        answers.push({ id: question.id, selected, ...(custom === undefined ? {} : { custom }) });
+      if (!settleQuestionCard(pending, id)) {
+        void delivery.edit(chatId, pending.card.messageIds.get(chatId) ?? 0, `${renderQuestions(pending, chatId)}\n\n\u26A0\uFE0F Answer every question first.`, questionKeyboard(id, chatId)).catch(() => {});
       }
-      questions.delete(id);
-      pending.resolve({ answers });
-      void pending.card.settle(`\u2705 Questions answered (id ${id}).`);
       return true;
     },
     async cancelQuestions(chatId, id) {

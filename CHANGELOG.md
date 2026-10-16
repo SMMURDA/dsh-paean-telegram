@@ -5,6 +5,27 @@ Versioning follows the npm package version in `package.json`.
 
 ## Unreleased
 
+### `/answer` settles a text-only question in one step
+
+- **A question without options no longer waits for a Submit tap.** `/answer` used to only stage the
+  text (`setQuestionCustom`), so the `ask_user_question` tool call — and the whole turn — stayed
+  pending while the operator believed they had answered; the only escape was `⏹ Abort`, which
+  reaches the transcript as `ask_user_question was aborted before the user answered` even though
+  the answer had arrived. New `Interactive.answerQuestionText(chatId, id, questionIndex, text)`
+  stages the text and settles the card in the same call when that question carries no options,
+  returning `submitted`, `staged` (an option question, or an unanswered sibling question) or
+  `stale` (no such pending question, or a chat the card never reached).
+- **The card hint and the replies now match what happens.** A text-only question points at the
+  single `/answer <id> <question-number> <text>` command ("it submits by itself"), and the command
+  answer distinguishes `✅ Answer N submitted.` from `✍️ Answer N updated — tap Submit on the
+  question card.`
+- **Option questions are unchanged.** Their selections still settle on the Submit tap; a shared
+  `settleQuestionCard` helper keeps the existing `⚠️ Answer every question first.` warning and the
+  blank `{ selected: [] }` skip semantics for an empty Submit.
+- Tests: `test/interactive.test.mjs` gains the QX group — one-step settle, the option staging path,
+  an unanswered sibling, foreign-chat and out-of-range refusals, the empty-Submit warning, and the
+  card hint text.
+
 ### Paean fork — dsh 0.2.x host compatibility, English UI, session-log export seam
 
 - **Target: Paean Harness.** The Paean Harness distribution (`@paean-ai/harness`) ships no

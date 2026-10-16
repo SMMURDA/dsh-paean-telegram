@@ -131,7 +131,7 @@ export const TELEGRAM_COMMANDS = [
   { command: "jobs", description: "Jobs list" },
   { command: "capabilities", description: "Profile capability matrix" },
   { command: "menucheck", description: "Self-check every menu data source" },
-  { command: "answer", description: "Answer a free-text question by id" },
+  { command: "answer", description: "Answer a text question by id (submits itself)" },
   { command: "settingsreplace", description: "Replace a settings namespace" },
   { command: "settingsmutate", description: "Mutate settings paths" },
   { command: "pickdir", description: "Pick the active project folder" },
@@ -191,16 +191,27 @@ export async function answerCommand(deps: DispatchDeps, c: CommandCall): Promise
       const questionNumber = Number(numberText);
       const text = rest.join(" ").trim();
       if (!Number.isInteger(id) || !Number.isInteger(questionNumber) || questionNumber <= 0 || text === "") {
-        await send("usage: /answer <questionId> <questionNumber> <text> \u2014 then tap Submit on the question card");
+        await send("usage: /answer <questionId> <questionNumber> <text> \u2014 a text question submits itself; an option question still needs Submit on the card");
         return;
       }
-      const questionId = questionIdAt(id, questionNumber - 1);
-      if (questionId === undefined) {
+      if (questionIdAt(id, questionNumber - 1) === undefined) {
         await send(`\u274C question ${questionNumber} not found for pending id ${id}.`, false);
         return;
       }
-      const updated = state.interactive ? await state.interactive.setQuestionCustom(chatId, id, questionId, text) : false;
-      await send(updated ? `\u270F Answer ${questionNumber} updated \u2014 tap Submit on the question card.` : "\u274C That question is no longer pending.", updated);
+      // A question without options has nothing left to choose, so this single
+      // command settles it (see `answerQuestionText`). Requiring a separate
+      // Submit tap here used to leave the tool call — and the whole turn —
+      // waiting until the operator aborted it.
+      const outcome = state.interactive ? await state.interactive.answerQuestionText(chatId, id, questionNumber - 1, text) : "stale";
+      if (outcome === "submitted") {
+        await send(`\u2705 Answer ${questionNumber} submitted.`, true);
+        return;
+      }
+      if (outcome === "staged") {
+        await send(`\u270F Answer ${questionNumber} updated \u2014 tap Submit on the question card.`, true);
+        return;
+      }
+      await send("\u274C That question is no longer pending.", false);
       return;
 }
 

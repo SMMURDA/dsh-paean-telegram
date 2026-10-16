@@ -325,7 +325,7 @@ Type `/help` in the chat for this list; `/start` also registers the BotFather co
 | `/bar` | Show or hide the button bar |
 | `/capabilities` | Profile capability matrix (which seams this profile provides) |
 | `/menucheck` | Self-check every menu data source |
-| `/answer <id> <text>` | Answer a free-text question by id |
+| `/answer <id> <question-number> <text>` | Answer a text question by id; a question without options settles with this one command, an option question still needs Submit on the card |
 | `/config get\|set <path> [value]` | Read or change bridge config live |
 | `/help` | All commands |
 
