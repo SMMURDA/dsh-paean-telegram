@@ -72,8 +72,8 @@ test('goal turn gets a progress card that finalizes into the turn receipt with h
   const final = edits.at(-1).text;
   // (markup-tolerant: the objective may render bold in the receipt header)
   assert.match(final, /✅ (?:<b>)?research the market(?:<\/b>)?/);
-  assert.match(final, /🛠️ 1 次工具/);
-  assert.match(final, /💾 命中 44%/, 'receipt keeps the cache hit-rate line');
+  assert.match(final, /🛠️ 1 tools/);
+  assert.match(final, /💾 Cache hit 44%/, 'receipt keeps the cache hit-rate line');
   assert.equal(feed.snapshot(7), undefined, 'turn end clears the running snapshot');
 });
 

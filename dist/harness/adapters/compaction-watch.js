@@ -102,8 +102,8 @@ export class CompactionWatcher {
             const chatId = this.deps.chatIdForAgent(sessionId);
             if (state.triggered && chatId !== undefined && event.data?.error === undefined && state.summary !== undefined) {
                 const tokens = `~${state.summary.shadowedTokenCount} tokens`;
-                const summary = state.summary.text === "" ? "" : `\n\u6458\u8981: ${state.summary.text}`;
-                this.deps.notify(chatId, `\u{1F4DD} \u4E0A\u4E0B\u6587\u5DF2\u538B\u7F29 ${tokens}${summary}`);
+                const summary = state.summary.text === "" ? "" : `\nSummary: ${state.summary.text}`;
+                this.deps.notify(chatId, `\u{1F4DD} Context compacted ${tokens}${summary}`);
             }
             this.states.delete(sessionId);
             return;

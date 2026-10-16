@@ -151,7 +151,7 @@ test('renderStatsStrip mirrors the web stats line verbatim', async () => {
     cacheReadTokens: 128440,
     cacheWriteTokens: 0,
   });
-  assert.equal(strip, '📊 6 轮 · 6 步\n⚡ LLM 31.9s · 工具调用 2.1s\n🎯 首 token 平均 1.3s · 123 tok/s\n💾 缓存命中 76%\n📝 输入 169K tok · 输出 3K tok');
+  assert.equal(strip, '📊 6 turns · 6 steps\n⚡ LLM 31.9s · Tool time 2.1s\n🎯 First token avg 1.3s · 123 tok/s\n💾 Cache hit 76%\n📝 Input 169K tok · Output 3K tok');
 });
 
 test('renderStatsStrip formats edge durations, tokens, and tps like the web', async () => {
@@ -164,7 +164,7 @@ test('renderStatsStrip formats edge durations, tokens, and tps like the web', as
       decodeMs: 1000, decodeTokens: 996,
       uncachedInputTokens: 517, outputTokens: 12300, cacheReadTokens: 0, cacheWriteTokens: 0,
     }),
-    '📊 1 轮 · 2 步\n⚡ LLM 45.2s · 工具调用 2m42s\n🎯 996 tok/s\n💾 缓存命中 0%\n📝 输入 517 tok · 输出 12.3K tok',
+    '📊 1 turns · 2 steps\n⚡ LLM 45.2s · Tool time 2m42s\n🎯 996 tok/s\n💾 Cache hit 0%\n📝 Input 517 tok · Output 12.3K tok',
   );
   assert.equal(
     renderStatsStrip({
@@ -172,7 +172,7 @@ test('renderStatsStrip formats edge durations, tokens, and tps like the web', as
       llmMs: 0, toolMs: 0, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0,
       uncachedInputTokens: 0, outputTokens: 1234567, cacheReadTokens: 0, cacheWriteTokens: 0,
     }),
-    '📝 输入 0 tok · 输出 1.2M tok',
+    '📝 Input 0 tok · Output 1.2M tok',
   );
   assert.equal(
     renderStatsStrip({

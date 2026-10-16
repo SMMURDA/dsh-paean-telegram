@@ -100,7 +100,7 @@ export function createSessionCards(deps: SessionCardsDeps): {
     const safe = Math.max(0, Math.min(page, totalPages - 1));
     const pageItems = sessions.slice(safe * SESSIONS_PAGE_SIZE, (safe + 1) * SESSIONS_PAGE_SIZE);
     const runningCount = sessions.filter((session) => session.running).length;
-    const label = group?.label ?? "\u5168\u90E8\u4F1A\u8BDD";
+    const label = group?.label ?? "All sessions";
     state.lastSessionsProject.set(chatId, key);
     // Design language: bold card title, a quiet meta strip, then one bold row
     // per session with its recency/id beneath — scannable on a phone.
@@ -108,13 +108,13 @@ export function createSessionCards(deps: SessionCardsDeps): {
       headerLine("\u{1F9ED}", "Sessions", plain(truncate(label, 26))),
       metaJoin(
         runningCount > 0 ? `\u25B6\uFE0F ${runningCount} running` : undefined,
-        `${sessions.length} \u4F1A\u8BDD`,
+        `${sessions.length} sessions`,
         archivedCount > 0 ? `\u{1F5C4}${archivedCount}` : undefined,
         `page ${safe + 1}/${totalPages}`,
       ),
       "",
     ];
-    if (sessions.length === 0) lines.push("(\u8BE5\u9879\u76EE\u6682\u65E0\u4F1A\u8BDD)", "");
+    if (sessions.length === 0) lines.push("(no sessions in this project)", "");
     for (const session of pageItems) {
       const title = displayTitleFor(session.title, session.cwd, session.id);
       const hasTitle = session.title !== undefined && session.title.trim() !== "";
@@ -130,7 +130,7 @@ export function createSessionCards(deps: SessionCardsDeps): {
         lines.push(`   ${mono(truncate(session.id, 14))}`);
       }
     }
-    lines.push("", "\u4F1A\u8BDD\u6309\u94AE\u6253\u5F00\u8BE6\u60C5 \u00B7 \u5F52\u6863 / \u5220\u9664 \u76F4\u63A5\u64CD\u4F5C\u3002");
+    lines.push("", "Session buttons open details \u00B7 Archive / Delete act directly.");
     await openCard(chatId, lines.join("\n"), buildSessionsKeyboard(pageItems.map((session) => ({
       id: session.id,
       title: displayTitleFor(session.title, session.cwd, session.id),
@@ -153,14 +153,14 @@ export function createSessionCards(deps: SessionCardsDeps): {
     const totalPages = Math.max(1, Math.ceil(groups.length / SESSION_PROJECTS_PAGE_SIZE));
     const safe = Math.max(0, Math.min(page, totalPages - 1));
     const pageGroups = groups.slice(safe * SESSION_PROJECTS_PAGE_SIZE, (safe + 1) * SESSION_PROJECTS_PAGE_SIZE);
-    const lines = [headerLine("\u{1F504}", "\u9879\u76EE", `${groups.length}`, `page ${safe + 1}/${totalPages}`), ""];
+    const lines = [headerLine("\u{1F504}", "Projects", `${groups.length}`, `page ${safe + 1}/${totalPages}`), ""];
     for (const group of pageGroups) {
       const current = bound !== undefined && group.sessions.some((session) => session.id === bound);
       lines.push(
         metaJoin(
           `${current ? "\u25B8" : "\u2022"} ${bold(truncate(group.label, 30))}`,
           group.runningCount > 0 ? `\u25B6\uFE0F${group.runningCount}` : undefined,
-          `\u5171${group.sessions.length}`,
+          `${group.sessions.length} total`,
         ),
       );
     }
@@ -215,7 +215,7 @@ export function createSessionCards(deps: SessionCardsDeps): {
   const historyCursors = new Map<number, number>();
 
   async function openHistoryCard(chatId: number, sessionId: string, beforeSeq?: number): Promise<void> {
-    // Turn-grouped trajectory view (issue #32), matching the web's 轨迹 ledger:
+    // Turn-grouped trajectory view (issue #32), matching the web's Trajectory ledger:
     // per-turn model/outcome/duration header plus user/thinking/tool/answer steps.
     if (beforeSeq === undefined) historyCursors.delete(chatId);
     else historyCursors.set(chatId, beforeSeq);
@@ -226,7 +226,7 @@ export function createSessionCards(deps: SessionCardsDeps): {
       result.hasMore && result.nextBefore !== undefined
         ? token({ action: "history-older", sessionId, beforeSeq: String(result.nextBefore) }, chatId)
         : undefined,
-      // Hot reload ("/history 无法热加载"): register this card as the chat's
+      // Hot reload ("/history would not hot-reload"): register this card as the chat's
       // active renderer so turn/end re-reads the trajectory in place, keeping
       // the page the user paged to.
     ), () => openHistoryCard(chatId, sessionId, historyCursors.get(chatId)));

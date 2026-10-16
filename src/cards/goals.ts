@@ -105,7 +105,7 @@ export function createGoalCards(deps: GoalCardsDeps): {
       startTodoCardRefresh(chatId, refresh);
     } catch (err) {
       log("openTodosCard FAILED", err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err));
-      await uiSend(chatId, `\u274C Todo list \u8F7D\u5165\u5931\u8D25\uff1A${plain(truncate(err instanceof Error ? err.message : String(err), 120))}`, { parse_mode: "HTML" });
+      await uiSend(chatId, `\u274C Failed to load todo list: ${plain(truncate(err instanceof Error ? err.message : String(err), 120))}`, { parse_mode: "HTML" });
     }
   }
 

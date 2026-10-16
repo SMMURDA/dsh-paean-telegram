@@ -75,8 +75,8 @@ export function diffTodos(previous, next) {
         remaining: pendingTodoCount(next),
     };
 }
-const PRIORITY_HIGH = /(?:^|[^A-Za-z0-9])(?:🔴|P0|high|urgent|紧急|高)(?:[^A-Za-z0-9]|$)/i;
-const PRIORITY_MEDIUM = /(?:^|[^A-Za-z0-9])(?:🟡|P1|medium|中)(?:[^A-Za-z0-9]|$)/i;
+const PRIORITY_HIGH = /(?:^|[^A-Za-z0-9])(?:🔴|P0|high|urgent|\u7D27\u6025|\u9AD8)(?:[^A-Za-z0-9]|$)/i;
+const PRIORITY_MEDIUM = /(?:^|[^A-Za-z0-9])(?:🟡|P1|medium|\u4E2D)(?:[^A-Za-z0-9]|$)/i;
 /** Display priority tag; absent from the durable schema, so this only colors
  * the Telegram card and never mutates the todo list. */
 export function todoPriority(content) {

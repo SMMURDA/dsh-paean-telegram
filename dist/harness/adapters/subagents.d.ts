@@ -23,7 +23,7 @@ export declare function promptSubagent(ctx: Context, parentSessionId: string, ch
     clientTimeZone?: string;
     signal?: AbortSignal;
 }): Promise<AdapterResult>;
-/** IA-1 #4 (audit: "interrupt 缺目录校验"): unlike promptSubagent, the
+/** IA-1 #4 (audit: "interrupt lacks target validation"): unlike promptSubagent, the
  * interrupt path used to forward any id pair straight into
  * subagents.interrupt with no target validation at all. Fail closed on
  * every gap: blank/malformed ids, a parent without a live agent, a child

@@ -1,9 +1,9 @@
 # DSH Paean Telegram
 
-A native **Telegram bridge for DeepSeek Harness (DSH)**. It lets you talk to your Harness
-agent, and drive the whole harness, from your phone: send a message and the agent answers in
-the chat; everything else — sessions, models, workspaces, goals, skills, plugins, host files —
-is one tap away on a persistent button bar.
+A native **Telegram bridge for DeepSeek Harness (DSH)**, built so the **Paean Harness
+distribution** — which ships no Telegram bridge of its own — can be driven from a phone. Send a
+message and the agent answers in the chat; everything else (sessions, models, workspaces, goals,
+skills, plugins, host files) is one tap away on a persistent button bar.
 
 There is **no server to run**: the plugin mounts inside the Harness Host process and talks to
 the Telegram Bot API directly over long polling.
@@ -20,6 +20,20 @@ the Telegram Bot API directly over long polling.
 > [xqicxx/dsh-telegram](https://github.com/xqicxx/dsh-telegram) (MIT) and keeps the original
 > license and copyright notice. This build adds **runtime-compatibility work for the dsh 0.2.x
 > host APIs** — see [Local changes in this build](#local-changes-in-this-build).
+>
+> **English only.** The documentation, the bot's button labels, cards, receipts and log lines are
+> all English.
+>
+> **Primary target: Paean Harness.** The Paean Harness distribution ships no Telegram bridge;
+> this repository exists to fill that gap. It is developed and tested on Paean Harness
+> `0.1.0-rc.21` (`@paean-ai/harness`) with `@deepseek-ai/*` `0.2.1-alpha.1` — the combination on
+> which the upstream plugin fails, see [Paean Harness](#paean-harness) and
+> [Runtime compatibility](#runtime-compatibility).
+>
+> **Other DSH profiles: best effort, and welcome.** Nothing in the code is Paean-specific — it
+> needs only Node.js >= 22 and the `@deepseek-ai/dsh*` peer packages — so any DSH profile running
+> `0.1.1-rc.2` through `0.2.x` should mount it, and the seam layer accepts both generations.
+> Builds outside that window are untested.
 
 ---
 
@@ -27,6 +41,7 @@ the Telegram Bot API directly over long polling.
 
 - [What you get](#what-you-get)
 - [Quick start](#quick-start)
+- [Paean Harness](#paean-harness)
 - [Install into a DSH profile](#install-into-a-dsh-profile)
 - [Bot token](#bot-token)
 - [Configuration](#configuration)
@@ -74,6 +89,58 @@ npm ci && npm run build
 # 5. export the bot token, restart the harness, then send /start to your bot
 ```
 
+## Paean Harness
+
+**Paean Harness** is a packaged DSH distribution (`@paean-ai/harness`) that runs a Harness process
+from a supervised launcher, with profiles under `~/.dsh/profiles/<name>` — for example the `web`
+profile that serves the Harness Web UI. It ships **no Telegram bridge**, so this plugin is
+maintained to fill exactly that gap.
+
+### Why the upstream plugin fails on Paean
+
+Paean's runtime bundles `@deepseek-ai/*` **0.2.1-alpha.1**, while the upstream plugin is written
+against the **0.1.1-rc.2** seams. Two concrete consequences:
+
+1. the plugin's `@deepseek-ai/dsh-*` peer ranges (`^0.1.1-rc.2`) do not match the running dsh
+   version, so the install is refused unless an exact-version exemption is granted; and
+2. once forced in, session reads break — `Session.events` is a *method* on 0.2.x, and iterating it
+   throws `session.events is not iterable`, so the Sessions card cannot load.
+
+This build removes both barriers: the peer ranges span `>=0.1.1-rc.2 <0.3.0`, and the session
+seams read whichever shape the host exposes.
+
+### Paean install recipe
+
+```bash
+git clone https://github.com/SMMURDA/dsh-paean-telegram.git
+cd dsh-paean-telegram
+# dist/ is committed, so this is optional unless you changed the source
+npm ci && npm run build
+```
+
+1. Install it into the profile that runs your Paean Harness process (`web` in the default Paean
+   setup) — see [Install into a DSH profile](#install-into-a-dsh-profile).
+2. Create `<workspace>/.pi/telegram.json` with your chat id:
+
+   ```json
+   { "security": { "allowedChatIds": [123456789] }, "watch": { "autoStart": true } }
+   ```
+
+3. Give the process a token: `TELEGRAM_BOT_TOKEN` in its environment, or a `chmod 600`
+   `.telegram-token` beside the package.
+4. Restart the Harness process. A Paean launcher is supervised, so it comes back on its own; the
+   Web UI and the bot are unavailable for a few seconds.
+5. Send `/start` to your bot.
+
+### Compatibility matrix
+
+| Environment | `@deepseek-ai/*` | Status |
+|---|---|---|
+| Paean Harness `0.1.0-rc.21` | `0.2.1-alpha.1` | **Primary target — verified live** |
+| Other DSH profiles | `0.1.1-rc.2` | Supported (legacy seams) |
+| Other DSH profiles | `0.2.x` | Best effort — same seams as Paean |
+| DSH `0.3.x` and later | — | Untested; seam work may be needed |
+
 ## Install into a DSH profile
 
 A DSH **profile** decides which plugins a Harness process loads. Pick either path.
@@ -114,15 +181,18 @@ Used by this deployment, and handy when you want to hack on the source in place.
    }
    ```
 
-   If the harness enforces plugin/runtime version compatibility, it records the allowed pair in
-   `~/.dsh/profiles/<profile>/compatibility.json`, for example:
+   DSH enforces plugin/runtime compatibility by checking every `@deepseek-ai/dsh*` peer range
+   against the running dsh version, and it records an **exact-version exemption** in
+   `~/.dsh/profiles/<profile>/compatibility.json` only when a peer range does *not* match, for
+   example:
 
    ```json
    { "dsh-telegram@0.4.0": ["0.2.1-alpha.1"] }
    ```
 
-   **Keep the package version unchanged** when you install this way: the exemption key contains
-   the version, and a mismatch can make the harness refuse the plugin at load time.
+   This fork's peer ranges (`>=0.1.1-rc.2 <0.3.0`) cover both the 0.1.x and 0.2.x generations, so
+   a matching exemption is normally **not** needed. An exemption recorded earlier for an older
+   build simply becomes unused; you can leave it or delete it.
 
 2. Add the plugin row to the profile patch (`~/.dsh/profiles/<profile>/cordis.patch.yml`):
 
@@ -351,11 +421,14 @@ Notes:
   [Troubleshooting](#troubleshooting).
 - `snapshotEvents()` is marked deprecated by dsh ("new calls prohibited") and is used here as the
   only synchronous accessor; the long-term migration is an event-driven fold.
-- When installing by `link:`, keep this package's version unchanged so a recorded compatibility
-  exemption key keeps matching.
-- Known gap: `/sessionlog` (session-log ZIP download) still points at the old
-  `@deepseek-ai/dsh-host-apiproxy` seam. Where that package is gone, the command degrades to the
-  "open the web UI" message instead of building the archive.
+- **Peer ranges** (`>=0.1.1-rc.2 <0.3.0` for every `@deepseek-ai/dsh*` peer) satisfy the
+  harness's compatibility gate on both generations, so installing on a 0.2.x runtime no longer
+  requires an exact-version exemption.
+- `/sessionlog` follows the moved export seam: it probes `@deepseek-ai/dsh-session-log-export`
+  first (reading the root log through `readSessionLogText`) and falls back to the legacy
+  `@deepseek-ai/dsh-host-apiproxy` module with its `readRaw` read.
+- The button labels, cards, receipts and log lines are English; the Chinese UI strings inherited
+  from upstream were replaced throughout `src/` and `test/`.
 
 ## Development
 
@@ -395,6 +468,8 @@ src/
 | Bot answers, but no cards or commands | Your chat is not on `security.allowedChatIds` (an empty roster rejects everyone). |
 | A source edit seems ignored | The Host imported the old module: restart the harness. Replacing `dist/` alone is not enough while it is cached. |
 | A `compatibility` error after bumping the version | The profile's recorded exemption key no longer matches; restore the package version or add a new exemption. |
+| `/sessionlog` answers `session log ZIP is served by the web profile …` | No export seam could be resolved for the harness user (`@deepseek-ai/dsh-session-log-export`, or the legacy apiproxy module). Check that the package resolves from the harness working directory or `$DSH_HOME`, then restart. |
+| `/sessionlog` reports a timeout | The ZIP is capped at 50 MB and 120 s; a very large session log should be fetched from the web UI instead. |
 
 ## Local changes in this build
 
@@ -416,9 +491,16 @@ Relative to upstream `xqicxx/dsh-telegram` at `main`:
 6. Upstream's internal development logs (Chinese-language `TESTING.md`, `PLAN.md`, `progress.md`,
    `task_plan.md`, `findings.md`, `README.zh.md` and `docs/`) are not mirrored here; they remain
    available in the upstream repository.
+7. **English-only UI**: every Chinese string, label, log line and comment under `src/` and `test/`
+   was replaced with English, and the Chinese labels quoted in `CHANGELOG.md` were translated.
+8. **`/sessionlog` restored** for hosts whose export seam moved to
+   `@deepseek-ai/dsh-session-log-export`: the probe checks the current package before the legacy
+   `@deepseek-ai/dsh-host-apiproxy` module, and reads the root log through `readSessionLogText`
+   with a `readRaw` fallback.
+9. **dsh peer ranges widened** to `>=0.1.1-rc.2 <0.3.0` so the harness's compatibility gate passes
+   on both the 0.1.x and 0.2.x generations without an exact-version exemption.
 
-The package version deliberately stays at `0.4.0` because profile compatibility exemptions key
-off it.
+The package version stays at `0.4.0` to remain aligned with the upstream release this fork tracks.
 
 ## Credits and license
 

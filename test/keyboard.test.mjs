@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { BAR_LABELS, ABORT_BTN, buildBackKeyboard, buildBarKeyboard, buildCollapsedBarKeyboard, buildConfirmKeyboard, buildGoalsKeyboard, buildHistoryKeyboard, buildMenuPage, buildModelsKeyboard, buildPagingKeyboard, buildProjectKeyboard, buildQueueKeyboard, buildSearchKeyboard, buildSessionDetailKeyboard, buildSessionsKeyboard, buildSessionProjectsKeyboard, buildSettingsKeyboard, buildSubagentDetailKeyboard, buildThinkingKeyboard, buildModelDetailKeyboard, buildPresetsKeyboard, buildSubagentsKeyboard, buildWorkspaceKeyboard, buildWorkspaceDetailKeyboard, CALLBACK_RE, COLLAPSE_BTN, decodeCallbackValue, encodedCallback, GOAL_BTN, inputPromptKeyboard, LEGACY_COLLAPSE_BTN, LEGACY_RETURN_BTN, normalizeBarLabel, PRESETS_BTN, queueBarLabel, RETURN_BTN, STOP_BTN, TODO_BTN, todoBarLabel } from '../dist/telegram/keyboard.js';
+import { BAR_LABELS, ABORT_BTN, buildBackKeyboard, buildBarKeyboard, buildCollapsedBarKeyboard, buildConfirmKeyboard, buildGoalsKeyboard, buildHistoryKeyboard, buildMenuPage, buildModelsKeyboard, buildPagingKeyboard, buildProjectKeyboard, buildQueueKeyboard, buildSearchKeyboard, buildSessionDetailKeyboard, buildSessionsKeyboard, buildSessionProjectsKeyboard, buildSettingsKeyboard, buildSubagentDetailKeyboard, buildThinkingKeyboard, buildModelDetailKeyboard, buildPresetsKeyboard, buildSubagentsKeyboard, buildWorkspaceKeyboard, buildWorkspaceDetailKeyboard, CALLBACK_RE, COLLAPSE_BTN, decodeCallbackValue, encodedCallback, GOAL_BTN, inputPromptKeyboard, LEGACY_COLLAPSE_BTN, LEGACY_RETURN_BTN, normalizeBarLabel, PRESETS_BTN, PREV_COLLAPSE_BTN, PREV_RETURN_BTN, queueBarLabel, RETURN_BTN, STOP_BTN, TODO_BTN, todoBarLabel } from '../dist/telegram/keyboard.js';
 
-test('reply bar layout is Menu/New/Models, Sessions/Plugins/Status, Goal/Queue/Compact, Todos/Abort (no 收起 — native ⊞ toggle owns show/hide)', () => {
+test('reply bar layout is Menu/New/Models, Sessions/Plugins/Status, Goal/Queue/Compact, Todos/Abort (no Collapse — native ⊞ toggle owns show/hide)', () => {
   const bar = buildBarKeyboard();
   assert.equal(bar.keyboard.length, 4);
   assert.deepEqual(
@@ -24,7 +24,7 @@ test('collapsed bar leaves only the single return button', () => {
   const collapsed = buildCollapsedBarKeyboard();
   assert.deepEqual(
     collapsed.keyboard.map((row) => row.map((button) => button.text)),
-    [['\u8FD4\u56DE']],
+    [[RETURN_BTN]],
   );
   assert.equal(collapsed.is_persistent, undefined);
 });
@@ -36,6 +36,8 @@ test('collapse/return labels normalize including legacy bars', () => {
   assert.equal(normalizeBarLabel(PRESETS_BTN), PRESETS_BTN, 'stale bars keep Presets working');
   assert.equal(normalizeBarLabel(LEGACY_COLLAPSE_BTN), COLLAPSE_BTN, 'stale monkey collapse label still maps');
   assert.equal(normalizeBarLabel(LEGACY_RETURN_BTN), RETURN_BTN, 'stale emoji return label still maps');
+  assert.equal(normalizeBarLabel(PREV_COLLAPSE_BTN), COLLAPSE_BTN, 'pre-English-UI collapse label still maps');
+  assert.equal(normalizeBarLabel(PREV_RETURN_BTN), RETURN_BTN, 'pre-English-UI return label still maps');
   assert.equal(normalizeBarLabel(STOP_BTN), ABORT_BTN, 'stale Stop label dispatches to Abort');
 });
 
@@ -210,8 +212,8 @@ test('buildSessionsKeyboard adds inline archive/delete buttons when callbacks ar
     { id: 'session-b', title: 'Beta' },
   ]);
   const rows = kb.inline_keyboard.filter((row) => row.some((button) => button.text.startsWith('🧭')));
-  assert.equal(rows[0].some((button) => button.callback_data === 't:archive-a' && button.text === '归档'), true);
-  assert.equal(rows[0].some((button) => button.callback_data === 't:delete-a' && button.text === '删除'), true);
+  assert.equal(rows[0].some((button) => button.callback_data === 't:archive-a' && button.text === 'Archive'), true);
+  assert.equal(rows[0].some((button) => button.callback_data === 't:delete-a' && button.text === 'Delete'), true);
   assert.equal(rows[1].some((button) => button.callback_data === 't:archive-a'), false);
 });
 
@@ -276,7 +278,7 @@ test('buildSessionProjectsKeyboard lists all/projects with running counts and pa
   const kb = buildSessionProjectsKeyboard(items, { all: 't:all', paging: { next: 't:next' }, back: 't:back' });
   assert.ok(kb.inline_keyboard.some((row) => row.some((b) => b.callback_data === 't:all')));
   assert.ok(kb.inline_keyboard.some((row) => row.some((b) => b.callback_data === 't:a' && b.text.includes('▶2'))));
-  assert.ok(kb.inline_keyboard.some((row) => row.some((b) => b.callback_data === 't:b' && b.text.includes('共1'))));
+  assert.ok(kb.inline_keyboard.some((row) => row.some((b) => b.callback_data === 't:b' && b.text.includes('1 total'))));
   assert.ok(kb.inline_keyboard.some((row) => row.some((b) => b.callback_data === 't:next')));
   assert.ok(kb.inline_keyboard.some((row) => row.some((b) => b.callback_data === 't:back')));
 });

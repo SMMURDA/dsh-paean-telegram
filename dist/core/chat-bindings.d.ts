@@ -4,7 +4,7 @@
  * The Bridge keeps chat↔agent bindings in memory only, so every bot restart
  * silently unbound every chat: `/history` answered "none bound", and a
  * Models-card tap auto-CREATED a new session instead of switching the model
- * inside the chat's existing one ("无法在session里面换model" after restarts).
+ * inside the chat's existing one ("cannot switch the model inside the session" after restarts).
  * This module mirrors the bindings to `<configRoot>/.pi/telegram-bindings.json`
  * so a remount can re-bind every chat whose session is still live.
  *

@@ -80,9 +80,9 @@ export function createQueueCards(deps: QueueCardsDeps): {
     }
     items.slice(0, 24).forEach((item, index) => lines.push(renderQueuePreviewLine(item, index)));
     if (items.length === 0) {
-      lines.push("(nothing pending)", "", "\u{1F4A1} \u8FDE\u7EED\u53D1\u4E24\u6761\u6D88\u606F\uFF0C\u7B2C\u4E8C\u6761\u4F1A\u6392\u961F\uFF0C\u6BCF\u6761\u90FD\u6709 \u270F/\u{1F5D1}/\u26A1 \u6309\u94AE\u3002");
+      lines.push("(nothing pending)", "", "\u{1F4A1} Send two messages in a row and the second queues; every entry has \u270F/\u{1F5D1}/\u26A1 buttons.");
     } else {
-      lines.push("", "\u270F \u7F16\u8F91 \u00B7 \u{1F5D1} \u5220\u9664 \u00B7 \u26A1 \u7ACB\u5373\u6267\u884C(\u4EC5 next-turn) \u2014 \u6309\u4E0B\u65B9\u6309\u94AE\u64CD\u4F5C");
+      lines.push("", "\u270F Edit \u00B7 \u{1F5D1} Delete \u00B7 \u26A1 Run now (next turn only) \u2014 use the buttons below");
     }
     await openCard(
       chatId,

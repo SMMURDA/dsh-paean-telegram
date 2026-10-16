@@ -5,6 +5,33 @@ Versioning follows the npm package version in `package.json`.
 
 ## Unreleased
 
+### Paean fork — dsh 0.2.x host compatibility, English UI, session-log export seam
+
+- **Target: Paean Harness.** The Paean Harness distribution (`@paean-ai/harness`) ships no
+  Telegram bridge, and the upstream plugin cannot run on it: its `@deepseek-ai/dsh-*` peer ranges
+  refuse the runtime, and its session reads assume the pre-0.2 `events` array. This fork is
+  maintained so Paean profiles mount it directly; other DSH profiles in the `0.1.1-rc.2`…`0.2.x`
+  window are supported on a best-effort basis.
+- **Host-API compatibility layer** (`src/harness/adapters/session-read.ts`): `sessionEvents()`,
+  `hasEventLog()` and `eventTime()` read a session log through whichever shape the host exposes
+  (`Session.snapshotEvents()` on dsh 0.2.x, the `events` array on 0.1.x), and `persistedRows()` /
+  `readPersistedEvents()` accept both persistence generations (`list()` snapshots plus
+  `open().read()`, and the legacy `readRaw`). Reading `.events` on a 0.2.x host returned the method
+  itself, so the Sessions card failed with `session.events is not iterable`.
+- **Every session-log reader migrated** onto those accessors: status panel, todos, agent presets
+  (blank check, mid-session switch, fork boundary), fork, approval de-duplication, search, history
+  and trajectory.
+- **Context usage** reads `agent.session` and accepts settled `assistant/message` usage beside the
+  legacy stream chunks.
+- **`/sessionlog` fixed**: the export seam moved from `@deepseek-ai/dsh-host-apiproxy` to
+  `@deepseek-ai/dsh-session-log-export`; the probe tries the current package first and reads the
+  root log through `readSessionLogText`, falling back to the legacy `readRaw`.
+- **dsh peer ranges widened** to `>=0.1.1-rc.2 <0.3.0`, so a 0.2.x runtime installs the plugin
+  without a per-version exemption.
+- **English-only UI**: every Chinese string, label, log line and comment under `src/` and `test/`
+  replaced with English; the Chinese labels quoted in older entries above were translated too.
+- **Tests**: `test/runtime-compat.test.mjs` pins the 0.2.x shapes; the suite is at 695 passing.
+
 ### Round 34 continuation (2026-08-24, current working tree)
 
 - **AT-1 attachment safety**: `sendWorkspaceAttachments` now rejects symlink escapes via canonical realpath checks; photos larger than 10MB fall back to `sendDocument`; failed voice transcription saves the voice file and hands the agent a path prompt instead of dropping it.
@@ -26,7 +53,7 @@ Issues #7-#13, #14, #15, #16-#21, #22-#26, #27-#30, #31-#33, #37-#44, #49, #50.
 - **Every advertised menu command actually dispatches**: 21 of the 45 commands advertised in the native menu (`/menu` `/new` `/compact` `/abort` `/stop` `/models` `/status` `/queue` `/sessions` `/workspaces` `/project` `/goals` `/skills` `/subagents` `/presets` `/plugins` `/hostsettings` `/credentials` `/host` `/jobs` `/capabilities`) had NO dispatch case and answered "Unknown command". Each now routes to the same action-registry entry / card opener its inline twin uses (`/stop` keeps its documented close-session semantics, distinct from the bar's abort).
 - **Typing keepalive guard no longer holds processes hostage**: the 10-minute self-arming guard that kills a lost turn's typing loop is now `unref()`ed (same rationale as the openclaw heartbeat). A bare `node --test test/*.test.mjs` run used to idle for up to ten minutes after a green suite because of these refed timers; the suite now exits naturally.
 - **Model switching inside a session is repeatable and sticky**: the per-session `ModelSelectionRef` now installs in the session-creation setup hook (and on `adopt()`), not lazily at the first mid-session switch. Cordis waterfalls run listeners outermost-first, so installing first keeps the Telegram-side selection authoritative over a later-installed web-side ref that would otherwise silently override every subsequent switch with its stale value (the "switched once, then never again" report). `selectSessionModel` also reinstalls a disposed entry instead of updating a dead ref, `resumeSession` drops the replaced agent's selection entry so a resumed session starts clean, and a successful mid-session switch now persists `model` into `.pi/telegram.json` exactly like the no-session auto-create branch always did — `✨ New` and restarts keep the chosen model.
-- **Sessions no longer split into shadow project groups (#4 "选了项目还在未分组")**: the host workspace registry folds new sessions into its `sessionIds` only lazily, so freshly created sessions were routinely unclaimed while their cwd already equaled the workspace path — and grouping fell through to a cwd pseudo project, splitting one project into look-alike groups ("dsh-telegram" beside "dsh-telegram (cx)") with every live session stranded in the shadow copy. An unclaimed session whose cwd matches a known group path now joins that group instead of spawning a duplicate; truly unknown cwds still form their own pseudo project and cwd-less sessions still trail under 未分组. Verified against the production roster: 111 sessions + one live telegram session collapse into a single dsh-telegram group. The mount-time menu sync also captures its transport locally, so a hot re-apply clearing `state.transport` mid-sync can no longer crash it.
+- **Sessions no longer split into shadow project groups (#4 "picked a project but the session stayed ungrouped")**: the host workspace registry folds new sessions into its `sessionIds` only lazily, so freshly created sessions were routinely unclaimed while their cwd already equaled the workspace path — and grouping fell through to a cwd pseudo project, splitting one project into look-alike groups ("dsh-telegram" beside "dsh-telegram (cx)") with every live session stranded in the shadow copy. An unclaimed session whose cwd matches a known group path now joins that group instead of spawning a duplicate; truly unknown cwds still form their own pseudo project and cwd-less sessions still trail under "Ungrouped". Verified against the production roster: 111 sessions + one live telegram session collapse into a single dsh-telegram group. The mount-time menu sync also captures its transport locally, so a hot re-apply clearing `state.transport` mid-sync can no longer crash it.
 - **Cards re-anchor when the conversation buries them ("bar buttons feel dead")**: every menu/picker/card morphs one persistent per-chat bubble in place (`Ephemeral.replace`), which keeps editing "successfully" even after dozens of later messages have pushed that bubble above the viewport — on the phone, tapping 🧩 Models or ⌛ Queue morphs content the user never sees, so every bar button reads as dead (and a model switch never even reaches `model-select`). The transport now records the highest message id it sent per chat (`lastOutgoingMessageId`), and `replace()` compares its anchor against that hint: beyond `REANCHOR_MESSAGE_GAP` (15) it skips the pointless edit, retracts the buried bubble and sends the card fresh at the bottom; within the gap, in-place instant navigation is unchanged, and without a hint the behavior is byte-for-byte legacy.
 
 
@@ -40,7 +67,7 @@ Issues #7-#13, #14, #15, #16-#21, #22-#26, #27-#30, #31-#33, #37-#44, #49, #50.
 - **#49 editText noise**: the benign Telegram `400: message is not modified` response is now classified BEFORE logging and reported as an `editText noop` line — it never pollutes ERROR-level `FAILED` alerting (and pre-c84db7f builds no longer escalate it into identical-payload retry storms once deployed).
 
 - **#31 CJK table alignment**: table cells are now padded by Telegram monospace display width (CJK/fullwidth/emoji = 2 columns, zero-width = 0) measured on the raw cell via `Intl.Segmenter` grapheme splitting, instead of UTF-16 `cell.length` — CJK columns no longer misalign, and cells containing `& < > "` stay aligned because escaping no longer counts toward padding. Columns keep a minimum width of 3 and a model-styled overlong separator row no longer inflates column widths.
-- **#32 trajectory view**: `/history` and the History card now render the web's 轨迹 (trajectory) ledger instead of a flat event dump — turns grouped `turn/start..turn/end` with per-turn `provider/model` (from `request/header`), outcome, duration, and 👤/🧠/🔧/📥/🤖 step lines (tool calls include their arguments). Long step lists fold to a counter; `Load older` pages six turns per window.
+- **#32 trajectory view**: `/history` and the History card now render the web's trajectory ledger instead of a flat event dump — turns grouped `turn/start..turn/end` with per-turn `provider/model` (from `request/header`), outcome, duration, and 👤/🧠/🔧/📥/🤖 step lines (tool calls include their arguments). Long step lists fold to a counter; `Load older` pages six turns per window.
 - **#33 empty response notice**: a successful turn with zero visible output no longer deletes its placeholder into silence — the placeholder is edited into a `🤷 Empty response · ⏱️ Ns` notice (fresh send fallback when no placeholder exists), and a pending inbound is satisfied by that notice instead of the misleading tool-shaped `NO_REPLY_REMINDER`.
 - **#37 classified turn failures**: upstream LLM failures are now rendered by tone — 429/rate-limit → `⏳ Rate limited…` (transient, wait and retry), 5xx → `⚠️ Upstream provider error…`, anything else stays verbatim after `❌`. The opaque OpenAI SDK literal `429 status code (no body)` is never shown raw; informative details ride along after a `·`.
 - **#38-#44 dsh 0.1.0-rc.8 upgrade**: all `@deepseek-ai/dsh-*` dev pins and peer ranges move from rc.7 to rc.8. rc.8 upstream fixes land in dsh-telegram: deepseek `reasoning_content` passback (#38), five-retry default with backoff for 429/5xx/TIMEOUT/TRANSPORT/EMPTY_RESPONSE — the retry half of #37 (#39), pi-ai wire-compat profile surface (#40), pi-ai image payload bound + oldest offload (#41), deepseek multimodal support (#42), plan-mode image-only requests (#43), agent-loop finalize delivered-prefix cancellation (#44), slash-command image attachment routing (#45), and oversized-image admission refusal (#46).
@@ -65,7 +92,7 @@ Issues #7-#13, #14, #15, #16-#21, #22-#26, #27-#30, #31-#33, #37-#44, #49, #50.
 - **#25 agent outbound files**: new `telegram_attach` tool (+ `telegram_send_file` alias) sends 1-10 workspace files per call, defaults to the executing agent's bound chat, enforces the allowed roster and the workspace root, caps files at 50MB, and auto-routes `.jpg/.jpeg/.png` → photo, `.ogg/.opus` → voice, common audio extensions → audio, everything else → document. Transport gains `sendVoice`/`sendAudio` on the same rate-limited queue.
 - **#26 reasoning table snapshots**: `markdownTablePreBlock` finds a GFM table anywhere in a reasoning snapshot and renders it as an aligned `<pre>` block in the openclaw progress draft instead of raw pipes; final assistant answers already used the #19 path.
 - **Loop/hang audit hardening**: full-project deadlock/hang/recursion audit (`docs/LOOP_AUDIT.md`); Status panel now stops the Todo card refresh loop, the status subagent latch always clears via a 5s timeout, Bot API/file/transcription fetches are bounded by abort timeouts, `SendQueue` clamps non-positive limiter values instead of spinning forever, and Markdown inline rendering has a recursion depth guard.
-- **Responsive bar/control lane**: TelegramTransport now runs every UI surface (cards, menus, status panels, command acks, bar swaps, typing, approval edits) on a dedicated `control:<chat>` queue, so bar buttons — Goal, Todos, Queue, 收起 — react immediately even while assistant streaming occupies the content queue.
+- **Responsive bar/control lane**: TelegramTransport now runs every UI surface (cards, menus, status panels, command acks, bar swaps, typing, approval edits) on a dedicated `control:<chat>` queue, so bar buttons — Goal, Todos, Queue, Collapse — react immediately even while assistant streaming occupies the content queue.
 - **Goal UX**: Goal card gains `🗑 Clear goal` and `/goalclear`; Goal stays display-only on tap and never touches the running session. Progress cards for autonomous `/goal` turns update per step/tool and collapse at turn end into the openclaw-style receipt (cache hit rate included).
 - **#8 auto compaction**: new `compact.threshold` (default 0.8), `compact.policy` (`ask|auto|never`), and `compact.cooldownMs`. Pressure watcher reads durable request usage/context, asks once with an inline approval card, and announces successful compactions with the summary and shadowed token count.
 - **#9 media**: multi-photo media groups become ONE inbound turn; voice messages transcribe via an OpenAI-compatible endpoint (`media.transcribe.*`, `OPENAI_API_KEY`); documents/videos download into `~/.dsh/sessions/<id>/attachments` and are injected as a read prompt.
@@ -113,13 +140,13 @@ Issue #4: `/goal` no longer fails silently.
 
 ## 0.3.4
 
-- Openclaw turn summary appends a third line with the web-style session stats: `📊 4 轮 · 279 步 | ⚡ LLM 46m41s · 工具调用 5m10s | 🎯 首 token 平均 3.5s · 68 tok/s`.
+- Openclaw turn summary appends a third line with the web-style session stats: `📊 4 rounds · 279 steps | ⚡ LLM 46m41s · 5m10s tools | 🎯 3.5s avg first token · 68 tok/s`.
 
 ## 0.3.3
 
-- Inbound routing now has two per-chat lanes: real chat content stays FIFO (rapid first messages still produce one session), while bar buttons and inline callbacks run in a responsive UI lane — tapping `🗜️ 收起` collapses the bar immediately and tapping `Goal` opens the card immediately, even while a turn is working.
+- Inbound routing now has two per-chat lanes: real chat content stays FIFO (rapid first messages still produce one session), while bar buttons and inline callbacks run in a responsive UI lane — tapping `🗜️ Collapse` collapses the bar immediately and tapping `Goal` opens the card immediately, even while a turn is working.
 - Session creation is serialized per chat across both lanes, and auto-create paths reuse a session that finished first instead of replacing it.
-- Openclaw turn summary adds a second line: `📥 输入 N tok · 📤 输出 M tok · 💾 缓存命中 X%`, counted per turn from usage chunks.
+- Openclaw turn summary adds a second line: `📥 N tok in · 📤 M tok out · 💾 X% cache hit`, counted per turn from usage chunks.
 
 ## 0.3.2
 
@@ -161,22 +188,22 @@ Final release of the web-parity Telegram bridge: workspace-grouped sessions, goa
 
 ### Sessions & workspaces
 
-- Sessions grouped by workspace project; running project opens first; `🔀 项目` switcher plus `🌐 全部会话` flat view.
+- Sessions grouped by workspace project; running project opens first; `🔀 Project` switcher plus `🌐 All sessions` flat view.
 - Session titles follow the web chain exactly: `session/title` → cwd basename → id (cold-session JSONL parsing fixed).
 - `running` mirrors `agent.status === 'running'`; cold sessions keep their header cwd.
-- Per-row `归档` / `删除` actions on the Sessions card; archived sessions hide with a `🗄N` count.
-- Workspace detail adds `✅ 使用此项目` and `🧭 会话`; the broken `w:create` callback dispatch is fixed.
+- Per-row `Archive` / `Delete` actions on the Sessions card; archived sessions hide with a `🗄N` count.
+- Workspace detail adds `✅ Use this project` and `🧭 Sessions`; the broken `w:create` callback dispatch is fixed.
 
 ### Goal & menu
 
 - Goal is a display/edit/pause card (no Create button); `/goal <objective> [maxRounds]` starts it.
 - Menu page 1 keeps Goal beside Capabilities; Watch moved to page 2.
-- Menu page 1 adds a `💡 收起 Bar / 显示 Bar` switch; `/bar [on|off]` toggles the keyboard.
-- Bar layout is `Menu/New/Models · Sessions/Plugins/Status · Goal/Queue/Compact · Stop/收起`.
+- Menu page 1 adds a `💡 Hide bar / Show bar` switch; `/bar [on|off]` toggles the keyboard.
+- Bar layout is `Menu/New/Models · Sessions/Plugins/Status · Goal/Queue/Compact · Stop/Collapse`.
 
 ### Bar & transport
 
-- `🗜️ 收起` hides the bar without leaving a carrier message; restoring is explicit via Menu or `/bar`.
+- `🗜️ Collapse` hides the bar without leaving a carrier message; restoring is explicit via Menu or `/bar`.
 - The tapped collapse/return message stays in the chat.
 - Exponential backoff for `getUpdates` 409 conflicts instead of retry spam.
 

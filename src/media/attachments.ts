@@ -246,7 +246,7 @@ export function makeAttachmentHandlers(deps: AttachmentHandlersDeps): {
         else scheduleBarSync(chatId, 0);
         return;
       }
-      await uiSend(chatId, `\u{1F399}\uFE0F \u8F6C\u5199: ${plain(transcribed.transcript)}`, { parse_mode: "HTML" });
+      await uiSend(chatId, `\u{1F399}\uFE0F Transcript: ${plain(transcribed.transcript)}`, { parse_mode: "HTML" });
       const delivered = state.bridge!.deliver(chatId, transcribed.transcript, messageId);
       if (!delivered.ok) await uiSend(chatId, `\u274C ${plain(delivered.text)}`, { parse_mode: "HTML" });
       else scheduleBarSync(chatId, 0);

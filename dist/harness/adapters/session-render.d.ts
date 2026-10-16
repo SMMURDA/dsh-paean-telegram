@@ -53,7 +53,7 @@ export declare function sortProjectSessions(details: readonly SessionDetail[]): 
  * project used to split one project into two look-alike groups ("dsh-telegram"
  * beside "dsh-telegram (cx)") and pushed every live session into the shadow
  * copy — the reported "selected the project, but the session sits in
- * 未分组". An unclaimed session whose cwd matches a known group path
+ * Ungrouped". An unclaimed session whose cwd matches a known group path
  * therefore joins THAT group instead of spawning a duplicate.
  */
 export declare function groupSessionsByProject(details: readonly SessionDetail[], workspaces: readonly ProjectWorkspace[]): ProjectGroup[];

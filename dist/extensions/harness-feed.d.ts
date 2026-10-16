@@ -1,50 +1,68 @@
 /**
- * dsh-harness-feed: DeepSeek Harness 原生流式输出（取代 openclaw 风格草稿）。
+ * dsh-harness-feed: native DeepSeek Harness streaming output (replaces the
+ * openclaw-style draft).
  *
- * 不再模仿 openclaw 的单条流动草稿，而是直接复用 harness 自身的输出管线——
- * 与 web 端（api-proxy → ui-conversation）完全同源的三层机制：
+ * It no longer imitates openclaw's single flowing draft; it reuses the
+ * harness's own output pipeline — the same three-layer mechanism as the web
+ * side (api-proxy → ui-conversation):
  *
- * 1. 同一事件源：`ctx.on("session/event")`，按 chat 绑定路由。
- * 2. 同一套 assistant 块折叠语义（web ui-conversation conversation-nodes/
- *    assistant.ts）：`assistant/chunk` 的 block-start / text-delta /
- *    reasoning-delta / block-end 折叠为 per-(step, index) blocks——折叠粒度
- *    与 web 一致（一次折叠 = 一条助手消息 = 一个 LLM step），因为
- *    chunk.index 在 agentic 回合的每个 step 都从 0 重来，裸 index 会让后续
- *    step 覆盖前文（HF-1）；text 块即正文、reasoning 块即 Think；多步正文
- *    按 (step, index) 序拼进同一个 ANSWER 气泡。
- * 3. 同一套工具呈现词汇：`ctx.tools.get(name, scope).presentCall /
- *    presentResult` 产出 ToolCallView / ToolResultView（generic / terminal /
- *    diff / search / read / web 卡），presenter 失败软回退 generic——与
- *    api-proxy viewFor 的行为一致。不再维护手写 emoji 表 + JSON 转储。
+ * 1. Same event source: `ctx.on("session/event")`, routed by chat binding.
+ * 2. Same assistant block folding semantics (web ui-conversation
+ *    conversation-nodes/assistant.ts): `assistant/chunk`'s block-start /
+ *    text-delta / reasoning-delta / block-end fold into per-(step, index)
+ *    blocks — at the same folding granularity as the web (one fold = one
+ *    assistant message = one LLM step), because chunk.index restarts at 0 on
+ *    every step of an agentic turn, so a bare index would let a later step
+ *    overwrite earlier prose (HF-1); a text block is the body, a reasoning
+ *    block is Think; multi-step prose is concatenated into the same ANSWER
+ *    bubble in (step, index) order.
+ * 3. Same tool presentation vocabulary: `ctx.tools.get(name, scope).presentCall /
+ *    presentResult` produce ToolCallView / ToolResultView (generic / terminal /
+ *    diff / search / read / web cards), with a soft fallback to generic when a
+ *    presenter fails — matching api-proxy viewFor. No more hand-maintained
+ *    emoji table + JSON dump.
  *
- * 渲染语义对齐 web 聊天视图：
- * - Think 行 = ReasoningRow：运行中显示最新一行，结束后冻结首行；
- * - 工具行 = 工具卡紧凑版：pending 标题来自 presentCall，完成态后缀来自
- *   presentResult（exit code / 匹配数 / 来源数…）；
- * - 正文 = 助手文本块实时打字机流式（web 的 markdown 气泡），turn/end 以
- *   已提交的 assistant/message 为权威终稿——旧 openclaw 草稿要等回合结束
- *   才投递正文，这里与 web 一致边生成边读。
+ * Rendering semantics align with the web chat view:
+ * - Think row = ReasoningRow: shows the newest line while running, freezes on
+ *   the first line once the turn ends;
+ * - tool row = compact tool card: the pending title comes from presentCall,
+ *   the completed suffix from presentResult (exit code / match count / source
+ *   count…);
+ * - body = the assistant text block streaming typewriter-style (the web's
+ *   markdown bubble); turn/end treats the committed assistant/message as the
+ *   authoritative final text — the old openclaw draft delivered the body only
+ *   after the turn ended, while here it is readable as it is generated, like
+ *   the web.
  *
- * 回合布局：ACTIVITY 卡（Think + 工具行，结束时折叠为收据/空态通知）+
- * ANSWER 消息（流式正文，最终保留在会话里）。openclaw 时代的可靠性机制
- * （占位领养 #12/#23、降级通知 #13/#33、diff 编辑 #15、心跳预算 #48、
- * Abort 停止阀、错误回合收据抑制 #37）全部保留。
+ * Turn layout: an ACTIVITY card (Think + tool rows, collapsing into a receipt
+ * or an empty-state notice at the end) + an ANSWER message (streamed body,
+ * finally kept in the chat). The openclaw-era reliability mechanisms
+ * (placeholder adoption #12/#23, downgrade notices #13/#33, diff edits #15,
+ * heartbeat budget #48, the Abort stop valve, errored-turn receipt
+ * suppression #37) are all preserved.
  *
- * HF-2 生命周期补充：超过 transport 单条上限的回答，流式期只编辑尾窗
- * （带截断标记），turn/end 撤回气泡并走 host.send 的 splitText 分片路径
- * 完整投递；仍在途的 "…" 占位由 turn/end 延迟结算（原位收编），无主落地
- * 的占位被删除而不是永远留在聊天里；session/event 监听在 teardown 时
- * 退订，热重挂载不会叠加监听导致重复渲染。
+ * HF-2 lifecycle addendum: for answers above the transport's single-message
+ * limit, streaming edits only the tail window (with a truncation marker) and
+ * turn/end retracts the bubble and delivers the whole text through host.send's
+ * splitText path; an in-flight "…" placeholder is settled late by turn/end
+ * (adopted in place), and a placeholder that never landed is deleted instead
+ * of staying in the chat forever; the session/event listener unsubscribes at
+ * teardown, so a hot remount cannot stack listeners and duplicate rendering.
  *
- * HF-3 生命周期修正：`outbound.liveFeed=false` 只关渲染、不关生命周期——
- * turn/start / turn/end 的登记与结算无条件执行（此前回合中途关掉开关会
- * 留下僵尸卡片：心跳继续编辑至 MAX_HEARTBEATS 上限、条目要等下一次
- * turn/start 才被回收；开局关、结束前开则凭空推一条 "🤷 Empty response"）。
- * 渲染副作用统一由 turn 级 canRender 快照门控（粘性：中途重开不为该回合
- * 复活过期渲染，核心转发器独占投递）；出错回合不再折叠成成功收据（#37：
- * 失败时 summary 直接抑制，占位走删除路径，让核心的分类失败消息独立呈现）；
- * reasoning 冻结提交时无条件排一帧活动刷新（block-end 会清空 liveThinkRaw，
- * 否则冻结首行要等无关事件才上屏）。
+ * HF-3 lifecycle fix: `outbound.liveFeed=false` turns off rendering only, not
+ * the lifecycle — turn/start / turn/end registration and settlement run
+ * unconditionally (turning the switch off mid-turn used to leave zombie cards
+ * behind: the heartbeat kept editing up to MAX_HEARTBEATS and entries were
+ * reclaimed only by the next turn/start; off at the start and on before the
+ * end conjured a "🤷 Empty response" out of nowhere). Rendering side effects
+ * are gated uniformly by a turn-level canRender snapshot (sticky: re-enabling
+ * mid-turn does not revive expired rendering for that turn, and the core
+ * forwarder owns delivery); an errored turn no longer collapses into a success
+ * receipt (#37: on failure the summary is suppressed outright and the
+ * placeholder takes the delete path, letting the core's classified failure
+ * message stand on its own); freezing a committed reasoning line always queues
+ * one activity refresh frame (block-end clears liveThinkRaw, so the frozen
+ * first line would otherwise wait for an unrelated event to reach the screen).
  */
 import type { Context } from "@deepseek-ai/cordis";
 import type { ExtensionHost } from "./types.js";

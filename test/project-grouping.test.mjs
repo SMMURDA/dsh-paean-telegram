@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 // Project grouping must not split one project into look-alike groups.
 //
 // User report (#4): after selecting the dsh-telegram project, sessions kept
-// appearing under a separate bucket ("未分组"/shadow copy) instead of the
+// appearing under a separate bucket ("Ungrouped"/shadow copy) instead of the
 // project group. Root cause: the host workspace registry folds new sessions
 // into `sessionIds` lazily (boot-time reconciliation), so live sessions are
 // routinely unclaimed while their cwd already equals the workspace path —
@@ -99,7 +99,7 @@ test('cwd-less sessions still trail under the ungrouped key, ordered last', () =
   assert.equal(groups[groups.length - 1].key, UNGROUPED_KEY);
   assert.equal(groups[0].label, 'dsh-telegram');
   const ungrouped = groups.find((g) => g.key === UNGROUPED_KEY);
-  assert.equal(ungrouped.label, '\u672A\u5206\u7EC4');
+  assert.equal(ungrouped.label, 'Ungrouped');
   assert.equal(ungrouped.sessions.length, 1);
 });
 
@@ -113,7 +113,7 @@ test('real-world shape: stale registry roster merges into one project group', ()
     groupSessionsByProject([...claimed, ...unclaimed, ...strays], [WS]),
     'session-0',
   );
-  assert.equal(groups.length, 3); // dsh-telegram + cx + 未分组
+  assert.equal(groups.length, 3); // dsh-telegram + cx + Ungrouped
   const main = groups[0];
   assert.equal(main.label, 'dsh-telegram');
   assert.equal(main.sessions.length, 111);

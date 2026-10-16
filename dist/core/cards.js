@@ -71,7 +71,7 @@ export function createCardRegistry(deps) {
         }
         catch (err) {
             log(`${label} load failed`, err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err));
-            await uiSend(chatId, `\u274C ${label} \u52A0\u8F7D\u5931\u8D25\uFF1A${plain(truncate(err instanceof Error ? err.message : String(err), 120))}`, { parse_mode: "HTML" });
+            await uiSend(chatId, `\u274C Failed to load ${label}: ${plain(truncate(err instanceof Error ? err.message : String(err), 120))}`, { parse_mode: "HTML" });
             return undefined;
         }
     }

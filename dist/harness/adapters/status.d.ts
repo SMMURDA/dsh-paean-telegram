@@ -39,7 +39,7 @@ export declare function resetStatusStats(): void;
  * not accumulate entries for every session the bot ever touched. */
 export declare function forgetStatusSession(sessionId: string): void;
 /** One-line variant for the turn-end summary (receipt stats segment):
- * `📊 4 轮 · 279 步 | ⚡ LLM 46m41s · 工具调用 5m10s | 🎯 首 token 平均 3.5s · 68 tok/s` */
+ * `📊 4 turns · 279 steps | ⚡ LLM 46m41s · Tool time 5m10s | 🎯 First token avg 3.5s · 68 tok/s` */
 export declare function renderStatsLine(stats: StatusStats): string | undefined;
 /** Conversation stats, multi-line grouped: turn/step, durations, speeds,
  * cache hit, and tokens. Shared by the status card and the streamed draft

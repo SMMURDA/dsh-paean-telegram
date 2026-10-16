@@ -290,7 +290,7 @@ test('IX-1 D3: todo notifications escape HTML metachars and keep parse_mode HTML
     assert.ok(text.includes('&lt;b&gt;task&lt;/b&gt; &amp; done'), `metachars must arrive escaped, got: ${text}`);
     assert.ok(text.includes('&lt;img src=x onerror=alert(1)&gt;'), `added-item markup must be escaped too, got: ${text}`);
     assert.equal(text.includes('<b>task</b>') || text.includes('<img'), false, 'no raw tag may reach the wire');
-    assert.ok(text.includes('\u{1F4CB} \u65B0\u589E\u4EFB\u52A1'), 'both diff lanes rendered');
+    assert.ok(text.includes('\u{1F4CB} New task'), 'both diff lanes rendered');
   } finally {
     await harness.stopWorld();
     harness.cleanup();

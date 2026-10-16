@@ -60,7 +60,7 @@ export function sortProjectSessions(details) {
  * project used to split one project into two look-alike groups ("dsh-telegram"
  * beside "dsh-telegram (cx)") and pushed every live session into the shadow
  * copy — the reported "selected the project, but the session sits in
- * 未分组". An unclaimed session whose cwd matches a known group path
+ * Ungrouped". An unclaimed session whose cwd matches a known group path
  * therefore joins THAT group instead of spawning a duplicate.
  */
 export function groupSessionsByProject(details, workspaces) {
@@ -116,7 +116,7 @@ export function groupSessionsByProject(details, workspaces) {
             group = pseudo.get(key);
             if (group === undefined) {
                 const base = cwd === "" ? "" : pathBasename(cwd);
-                let label = base === "" ? "\u672A\u5206\u7EC4" : base;
+                let label = base === "" ? "Ungrouped" : base;
                 if (usedLabels.has(label)) {
                     const parent = base === "" ? "" : parentBasename(cwd);
                     label = parent === "" ? cwd : `${base} (${parent})`;

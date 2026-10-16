@@ -29,7 +29,21 @@ interface ExportSeam {
   streamSessionLogZip: StreamZip;
   sessionLogExportDeps(ctx: Context): ExportDepsLike;
   flushLiveSessionLog(deps: ExportDepsLike, id: string, signal: AbortSignal): Promise<void>;
+  /** Current seam: read the root session log as serialized JSONL text. Absent
+   * on the legacy apiproxy module, which reads through `readRaw` instead. */
+  readSessionLogText?(persistence: unknown, id: string, signal?: AbortSignal): Promise<string | undefined>;
 }
+
+/**
+ * Seam module locations tried in order. The export seam moved out of
+ * `@deepseek-ai/dsh-host-apiproxy` into `@deepseek-ai/dsh-session-log-export`;
+ * both are probed so one build serves older and current profiles.
+ */
+const SEAM_CANDIDATES: readonly (readonly [string, string])[] = [
+  ["@deepseek-ai/dsh-session-log-export", "lib/index.js"],
+  ["@deepseek-ai/dsh-session-log-export", "lib/types/index.js"],
+  ["@deepseek-ai/dsh-host-apiproxy", "lib/types/session-export.js"],
+];
 
 /** Blue-7: one probe costs readdirSync + require.resolve + a dynamic import.
  * The resolution promise is cached at module level so every export after the
@@ -57,14 +71,16 @@ async function probeExportSeam(): Promise<ExportSeam | undefined> {
     }
   }
   for (const base of bases) {
-    try {
-      const require = createRequire(join(base, "noop.js"));
-      const pkg = require.resolve("@deepseek-ai/dsh-host-apiproxy/package.json");
-      const moduleUrl = pathToFileURL(pkg.replace(/package\.json$/, "lib/types/session-export.js")).href;
-      const seam = (await import(moduleUrl)) as ExportSeam;
-      if (typeof seam.streamSessionLogZip === "function") return seam;
-    } catch {
-      /* try the next profile root */
+    const require = createRequire(join(base, "noop.js"));
+    for (const [pkg, entry] of SEAM_CANDIDATES) {
+      try {
+        const manifest = require.resolve(`${pkg}/package.json`);
+        const moduleUrl = pathToFileURL(join(manifest.replace(/package\.json$/, ""), entry)).href;
+        const seam = (await import(moduleUrl)) as ExportSeam;
+        if (typeof seam.streamSessionLogZip === "function") return seam;
+      } catch {
+        /* try the next candidate, then the next profile root */
+      }
     }
   }
   return undefined;
@@ -75,6 +91,17 @@ function loadExportSeam(): Promise<ExportSeam | undefined> {
     exportSeamPromise = probeExportSeam().catch(() => undefined);
   }
   return exportSeamPromise;
+}
+
+/**
+ * Test seam: pin the probe result so the "seam present" and "seam absent"
+ * branches are both deterministic. On a host where the profile packages really
+ * resolve (any developer machine running Paean), the probe succeeds and the
+ * absent-branch test would otherwise depend on the environment. Production code
+ * never calls this.
+ */
+export function setExportSeamForTest(seam: unknown): void {
+  exportSeamPromise = Promise.resolve(seam as ExportSeam | undefined);
 }
 
 /** Oversize guidance: the web URL path and the host-side location, so a
@@ -93,6 +120,22 @@ export interface SessionLogExport {
   buffer?: Uint8Array;
 }
 
+/**
+ * Root log handed to the ZIP writer. The current seam serializes it itself and
+ * expects JSONL text through `readSessionLogText`; the legacy apiproxy seam
+ * expected the raw `readRaw` payload instead.
+ */
+async function readRootLog(seam: ExportSeam, deps: ExportDepsLike, sessionId: string, signal: AbortSignal): Promise<unknown> {
+  if (typeof seam.readSessionLogText === "function") {
+    return await seam.readSessionLogText(deps.sessionPersistence, sessionId, signal);
+  }
+  const legacy = (deps.sessionPersistence as { readRaw?: (id: string, signal?: AbortSignal) => Promise<unknown> } | undefined)?.readRaw;
+  if (typeof legacy !== "function") {
+    throw new Error("this profile's session-export seam cannot read the session log");
+  }
+  return await legacy.call(deps.sessionPersistence, sessionId, signal);
+}
+
 /** sessionLog download: same ZIP the web serves, buffered for Telegram. */
 export async function exportSessionLog(ctx: Context, sessionId: string, includeDescendants: boolean): Promise<SessionLogExport> {
   const seam = await loadExportSeam();
@@ -108,9 +151,9 @@ export async function exportSessionLog(ctx: Context, sessionId: string, includeD
   const signal = AbortSignal.timeout(SESSION_LOG_EXPORT_TIMEOUT_MS);
   try {
     await seam.flushLiveSessionLog(deps, sessionId, signal);
-    const raw = await (deps.sessionPersistence as { readRaw(id: string, signal?: AbortSignal): Promise<unknown> }).readRaw(sessionId, signal);
-    if (raw === undefined) return { result: fail(`session ${sessionId} not found`) };
-    const stream = seam.streamSessionLogZip(deps, raw, sessionId, includeDescendants, 6, signal);
+    const root = await readRootLog(seam, deps, sessionId, signal);
+    if (root === undefined) return { result: fail(`session ${sessionId} not found`) };
+    const stream = seam.streamSessionLogZip(deps, root, sessionId, includeDescendants, 6, signal);
     const reader = stream.getReader();
     const chunks: Uint8Array[] = [];
     let total = 0;

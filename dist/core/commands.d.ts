@@ -76,7 +76,7 @@ export declare function maskConfigValue(path: string, value: unknown): string;
 export declare function configCommand(deps: DispatchDeps, c: CommandCall): Promise<void>;
 /** /history — turn-grouped trajectory (issue #32). Two upgrades:
  * 1. No id and nothing bound no longer hard-fails — it falls back to the
- *    most recent session ("没有绑定id" after a bot restart left the command
+ *    most recent session ("none bound" after a bot restart left the command
  *    dead for the one use case that matters: catch up on the latest work).
  * 2. Plain `/history` opens the LIVE History card, which re-renders itself
  *    on every turn/end (hot reload) and carries Load older / Session nav.

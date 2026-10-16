@@ -612,7 +612,7 @@ async function openMenuAt(chatId, page) {
         [
             { label: `\u2728 New session \u00B7 ${project}`, cb: "m:new", full: true },
             { label: `\u{1F4C1} Project \u00B7 ${project}`, cb: "m:project", full: true },
-            { label: state.barCollapsed.get(chatId) === true ? "\u{1F4A1} \u663E\u793A Bar" : "\u{1F4A1} \u6536\u8D77 Bar", cb: "m:bartoggle", full: true },
+            { label: state.barCollapsed.get(chatId) === true ? "\u{1F4A1} Show Bar" : "\u{1F4A1} Hide Bar", cb: "m:bartoggle", full: true },
             ...extensions.flatMap((extension) => extension.menuItems?.(buildExtensionHost()) ?? []),
             { label: "\u{1F5C2} Workspaces", cb: "m:workspaces" },
             { label: "\u{1F9EC} Skills", cb: "m:skills" },
@@ -875,13 +875,13 @@ function notifyTodoChange(chatId, previous, next) {
     // lost). Escape via the shared html helper AFTER the 80-char clip so a cut
     // can never split an entity.
     for (const todo of diff.added.slice(0, 5))
-        lines.push(`\u{1F4CB} \u65B0\u589E\u4EFB\u52A1\uff1A${plain(todo.content.slice(0, 80))}`);
+        lines.push(`\u{1F4CB} New task: ${plain(todo.content.slice(0, 80))}`);
     for (const todo of diff.started.slice(0, 5))
-        lines.push(`\u23F3 \u8FDB\u884C\u4E2D\uff1A${plain(todo.content.slice(0, 80))}`);
+        lines.push(`\u23F3 In progress: ${plain(todo.content.slice(0, 80))}`);
     for (const todo of diff.completed.slice(0, 5))
-        lines.push(`\u2705 \u5DF2\u5B8C\u6210\uff1A${plain(todo.content.slice(0, 80))}`);
+        lines.push(`\u2705 Completed: ${plain(todo.content.slice(0, 80))}`);
     if (diff.completed.length > 0)
-        lines.push(`\u{1F4CB} \u5269 ${diff.remaining} \u9879\u5F85\u529E`);
+        lines.push(`\u{1F4CB} ${diff.remaining} todos remaining`);
     if (lines.length === 0)
         return;
     void uiSend(chatId, lines.join("\n"), { parse_mode: "HTML" });
@@ -1064,7 +1064,7 @@ function setBarCollapsed(chatId, collapsed) {
             // A persistent reply keyboard survives the carrier deletion; Telegram
             // only replaces it when another keyboard message lands. Send the
             // collapsed one-button keyboard as the new carrier (#17).
-            const id = await t.sendTextControl(chatId, "\u{1F5DC}\uFE0F Bar \u5DF2\u6536\u8D77", {
+            const id = await t.sendTextControl(chatId, "\u{1F5DC}\uFE0F Bar collapsed", {
                 parse_mode: "HTML",
                 disable_notification: true,
                 reply_markup: buildCollapsedBarKeyboard(),
@@ -1198,9 +1198,9 @@ function constructMount(ctx, botToken) {
                 parse_mode: "HTML",
                 reply_markup: {
                     inline_keyboard: [[
-                            { text: "\u2705 \u81EA\u52A8\u538B\u7F29", callback_data: token({ action: "compact-auto", sessionId }, chatId) },
-                            { text: "\u{1F4DD} \u6211\u6765\u624B\u52A8", callback_data: token({ action: "compact-manual", sessionId }, chatId) },
-                            // RH-10: a third button ("🟢 压缩并继续") used to mint the SAME
+                            { text: "\u2705 Auto-compact", callback_data: token({ action: "compact-auto", sessionId }, chatId) },
+                            { text: "\u{1F4DD} Manual", callback_data: token({ action: "compact-manual", sessionId }, chatId) },
+                            // RH-10: a third button ("🟢 Compact and continue") used to mint the SAME
                             // compact-auto action as the first — a copy-paste remnant with no
                             // independent semantic (compaction-watch.ts has only approve /
                             // snooze). Removed; the card now has exactly one button per

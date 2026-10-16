@@ -1,5 +1,5 @@
 /**
- * Trajectory renderer (issue #32): the Web "轨迹" view is a turn-grouped
+ * Trajectory renderer (issue #32): the Web "Trajectory" view is a turn-grouped
  * ledger (request header/model, tool calls with args and results, thinking,
  * per-turn outcome and duration) — not the flat `[seq] role text` event dump
  * `/history` used to print. This module renders `readTrajectory`'s data as

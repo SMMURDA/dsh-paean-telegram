@@ -71,18 +71,18 @@ test('fence language info is sanitized instead of leaking markup (#30)', () => {
 
 test('GFM tables become aligned monospace blocks instead of raw pipes (#19, #30)', () => {
   const html = markdownToHtml([
-    '| 消息 | 文件 | 大小 |',
+    '| Message | File | Size |',
     '|---|---|---|',
     '| 📌 ① | `a.xlsx` | 26,666B |',
     '| 📌 ② | `b.csv` | 39,723B |',
     '',
-    '**三个文件已发送**',
+    '**three files sent**',
   ].join('\n'));
-  assert.match(html, /<pre><code>\| 消息\s+\| 文件\s+\| 大小\s+\|/);
-  assert.match(html, /\| 📌 ① \| `a\.xlsx`\s+\| 26,666B\s+\|/);
+  assert.match(html, /<pre><code>\| Message\s+\| File\s+\| Size\s+\|/);
+  assert.match(html, /\| 📌 ①\s+\| `a\.xlsx`\s+\| 26,666B\s+\|/);
   assert.equal(html.includes('|---|'), false, 'separator syntax is replaced');
   assert.match(html, /<\/code><\/pre>/, 'table block closes both code and pre');
-  assert.match(html, /<b>三个文件已发送<\/b>/, 'markdown around the table still renders');
+  assert.match(html, /<b>three files sent<\/b>/, 'markdown around the table still renders');
   assert.equal(html.split('<pre>').length, 2, 'exactly one monospace table block');
 });
 
@@ -170,9 +170,12 @@ function renderedColumnWidths(markdown) {
   return rows.map((row) => row.map((cell) => cellDisplayWidth(cell)));
 }
 test('cellDisplayWidth measures CJK as two columns and Latin as one (#31)', () => {
-  assert.equal(cellDisplayWidth('文件'), 4);
+  // The CJK probes stay escaped on purpose: the point of this test is the
+  // two-column display width of Han code points (\u6587\u4EF6 = 2 chars = 4 columns,
+  // \u4E3B\u4EA4\u4ED8\u7269 = 4 chars = 8 columns), which no Latin word can exercise.
+  assert.equal(cellDisplayWidth('\u6587\u4EF6'), 4);
   assert.equal(cellDisplayWidth('20,064 B'), 8);
-  assert.equal(cellDisplayWidth('主交付物'), 8);
+  assert.equal(cellDisplayWidth('\u4E3B\u4EA4\u4ED8\u7269'), 8);
   assert.equal(cellDisplayWidth('📌'), 2);
   assert.equal(cellDisplayWidth('e\u0301'), 1, 'combining mark adds no width');
   assert.equal(cellDisplayWidth('a&b'), 3, 'raw width: entities render one glyph');
@@ -180,11 +183,13 @@ test('cellDisplayWidth measures CJK as two columns and Latin as one (#31)', () =
 });
 
 test('CJK and Latin cells in one column align by display width (#31)', () => {
+  // Same reason as above: the third column deliberately mixes Latin and CJK
+  // cells, so its width must come from the CJK cell's 8 display columns.
   const markdown = [
-    '| 文件 | 大小 | 说明 |',
+    '| File | Size | Note |',
     '|---|---|---|',
-    '| result.xlsx | 20,064 B | 主交付物 |',
-    '| data.csv | 5,039 B | CSV 备份 |',
+    '| result.xlsx | 20,064 B | \u4E3B\u4EA4\u4ED8\u7269 |',
+    '| data.csv | 5,039 B | CSV \u5907\u4EFD |',
   ].join('\n');
   const widths = renderedColumnWidths(markdown);
   assert.equal(widths.length, 4);

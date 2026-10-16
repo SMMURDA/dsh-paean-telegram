@@ -89,8 +89,8 @@ test('a watcher-triggered successful compaction is announced with its summary', 
   emit('agent-1', ev('compaction/summary', { shadowedTokenCount: 1234, summary: [{ type: 'text', text: 'kept the essence' }] }));
   emit('agent-1', ev('compaction/end', {}));
   assert.equal(calls.length, 2);
-  assert.match(calls[1], /notify:.*上下文已压缩 ~1234 tokens/);
-  assert.match(calls[1], /摘要: kept the essence/);
+  assert.match(calls[1], /notify:.*Context compacted ~1234 tokens/);
+  assert.match(calls[1], /Summary: kept the essence/);
 });
 
 test('session disposal drops watcher state so a new episode can compact again (#20)', async () => {

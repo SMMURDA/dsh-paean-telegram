@@ -45,7 +45,10 @@ test('saveDocumentAttachment stores bytes under the session attachments director
   const oldHome = process.env.DSH_HOME;
   process.env.DSH_HOME = base;
   try {
-    const res = await saveDocumentAttachment('session-a', new Uint8Array([9, 9, 9]), '../../notes-中文.txt', 1234);
+    // The fixture keeps non-ASCII filename characters on purpose: the
+    // sanitizer must preserve them (see the \u4E00-\u9FFF range in
+    // harness/adapters/media.ts) while stripping the traversal prefix.
+    const res = await saveDocumentAttachment('session-a', new Uint8Array([9, 9, 9]), '../../notes-\u4E2D\u6587.txt', 1234);
     assert.equal(res.ok, true);
     assert.match(res.path, /\/session-a\/attachments\/1234-notes/);
     assert.equal(existsSync(res.path), true);

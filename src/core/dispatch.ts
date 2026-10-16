@@ -1508,9 +1508,9 @@ async function dispatchBarButton(chatId: number, label: string): Promise<void> {
       return actions["presets"](actionCtx);
     case THINKING_BTN:
       return dispatchBarButton(chatId, REASONING_BTN);
-    // 收起 is gone from the bar (the native ⊞ input-row toggle owns
-    // show/hide now); the case stays ONLY so a stale 收起 on an old
-    // rendered keyboard restores the fresh full bar instead of collapsing.
+    // The collapse label is gone from the bar (the native ⊞ input-row toggle
+    // owns show/hide now); the case stays ONLY so a stale collapse tap on an
+    // old rendered keyboard restores the fresh full bar instead of collapsing.
     case COLLAPSE_BTN:
     case RETURN_BTN:
       return setBarCollapsed(chatId, false);

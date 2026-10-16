@@ -127,11 +127,11 @@ function resultSuffix(view) {
             return undefined;
         case "search":
             return view.shape === "matches"
-                ? `${view.total} \u6761\u5339\u914D${view.truncated ? " \u00B7 \u622A\u65AD" : ""}`
-                : `${view.total} \u4E2A\u8DEF\u5F84${view.truncated ? " \u00B7 \u622A\u65AD" : ""}`;
+                ? `${view.total} matches${view.truncated ? " \u00B7 truncated" : ""}`
+                : `${view.total} paths${view.truncated ? " \u00B7 truncated" : ""}`;
         case "web":
             return view.kind === "search"
-                ? `${view.sources.length} \u6761\u6765\u6E90${view.truncated ? " \u00B7 \u622A\u65AD" : ""}`
+                ? `${view.sources.length} sources${view.truncated ? " \u00B7 truncated" : ""}`
                 : `HTTP ${view.statusCode}`;
         case "read": {
             const path = flatText(view.path);
@@ -875,7 +875,7 @@ export function mountHarnessFeed(host, ctx) {
             const hasContent = feed.reasoningSteps > 0 || feed.toolCalls > 0 || streamedText.trim() !== "";
             // HF-3 B: an errored turn must never collapse its placeholder into the
             // SUCCESS receipt (#37) — with HF-2 counting streamed prose as content,
-            // a partial-prose-then-crash turn used to render "⚙️ 完成" right next
+            // a partial-prose-then-crash turn used to render "⚙️ Completed" right next
             // to the core's classified ❌ message. Chosen behavior: SUPPRESS the
             // summary on failure (placeholder takes the delete path below, one
             // outcome voice per turn) instead of adding a failure-flavored receipt;

@@ -336,6 +336,6 @@ test('queue card empty state is unchanged (QC-1)', async () => {
   await cards.openQueueCard(1);
 
   assert.ok(seen.text.includes('(nothing pending)'));
-  assert.ok(seen.text.includes('\u{1F4A1} \u8FDE\u7EED\u53D1\u4E24\u6761\u6D88\u606F\uFF0C\u7B2C\u4E8C\u6761\u4F1A\u6392\u961F\uFF0C\u6BCF\u6761\u90FD\u6709 \u270F/\u{1F5D1}/\u26A1 \u6309\u94AE\u3002'));
+  assert.ok(seen.text.includes('\u{1F4A1} Send two messages in a row and the second queues; every entry has \u270F/\u{1F5D1}/\u26A1 buttons.'));
   assert.equal(seen.text.includes('#1 '), false);
 });

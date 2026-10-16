@@ -140,7 +140,7 @@ test('harness feed streams reasoning + tool rows on the activity card and collap
   const receipt = host.edits.filter((e) => e.messageId === activityId).at(-1);
   assert.match(
     receipt.text,
-    /^\u2699\uFE0F (?:<b>)?\u5B8C\u6210(?:<\/b>)? \u00B7 \u23F1\uFE0F 1s \u00B7 \u{1F9E0} 1 \u6B21\u601D\u8003 \u00B7 \u{1F6E0}\uFE0F 1 \u6B21\u5DE5\u5177$/u,
+    /^\u2699\uFE0F (?:<b>)?Completed(?:<\/b>)? \u00B7 \u23F1\uFE0F 1s \u00B7 \u{1F9E0} 1 thoughts \u00B7 \u{1F6E0}\uFE0F 1 tools$/u,
   );
 });
 
@@ -384,7 +384,7 @@ test('multi-step reasoning freezes one think line per burst and never leaks into
   const receipt = host.edits.filter((e) => e.messageId === activityId).at(-1);
   assert.match(
     receipt.text,
-    /^\u2699\uFE0F (?:<b>)?\u5B8C\u6210(?:<\/b>)? \u00B7 \u23F1\uFE0F 1s \u00B7 \u{1F9E0} 2 \u6B21\u601D\u8003 \u00B7 \u{1F6E0}\uFE0F 1 \u6B21\u5DE5\u5177$/u,
+    /^\u2699\uFE0F (?:<b>)?Completed(?:<\/b>)? \u00B7 \u23F1\uFE0F 1s \u00B7 \u{1F9E0} 2 thoughts \u00B7 \u{1F6E0}\uFE0F 1 tools$/u,
     'both bursts count as reasoning steps',
   );
 });
@@ -579,7 +579,7 @@ test('errored turn with streamed prose deletes the placeholder instead of a succ
 
   // HF-3 B chose SUPPRESS over a failure-flavored receipt: the core bridge's
   // classified ❌ message is the single outcome voice (#37).
-  assert.ok(!host.edits.some((e) => e.text.includes('\u5B8C\u6210')), `no \u2699\uFE0F 完成 receipt next to the core failure: ${JSON.stringify(host.edits.map((e) => e.text))}`);
+  assert.ok(!host.edits.some((e) => e.text.includes('Completed')), `no \u2699\uFE0F Completed receipt next to the core failure: ${JSON.stringify(host.edits.map((e) => e.text))}`);
   assert.ok(host.deletes.some((d) => d.chatId === 7 && d.messageId === activityId), 'placeholder takes the delete path instead of the success receipt');
   // Pre-existing behavior untouched: whatever streamed still settles into its own bubble.
   const finalEdit = host.edits.filter((e) => e.messageId === answerId).at(-1);

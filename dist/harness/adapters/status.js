@@ -69,22 +69,22 @@ function formatTokensPerSecond(tps) {
     return clamped >= 10 ? String(Math.round(clamped)) : String(Math.round(clamped * 10) / 10);
 }
 /** One-line variant for the turn-end summary (receipt stats segment):
- * `📊 4 轮 · 279 步 | ⚡ LLM 46m41s · 工具调用 5m10s | 🎯 首 token 平均 3.5s · 68 tok/s` */
+ * `📊 4 turns · 279 steps | ⚡ LLM 46m41s · Tool time 5m10s | 🎯 First token avg 3.5s · 68 tok/s` */
 export function renderStatsLine(stats) {
     const segments = [];
     if (stats.steps > 0) {
-        segments.push(`\u{1F4CA} ${stats.turns} \u8F6E \u00B7 ${stats.steps} \u6B65`);
+        segments.push(`\u{1F4CA} ${stats.turns} turns \u00B7 ${stats.steps} steps`);
     }
     const durations = [];
     if (stats.llmMs > 0)
         durations.push(`LLM ${formatDurationWeb(stats.llmMs)}`);
     if (stats.toolMs > 0)
-        durations.push(`\u5DE5\u5177\u8C03\u7528 ${formatDurationWeb(stats.toolMs)}`);
+        durations.push(`Tool time ${formatDurationWeb(stats.toolMs)}`);
     if (durations.length > 0)
         segments.push(`\u26A1 ${durations.join(" \u00B7 ")}`);
     const speeds = [];
     if (stats.ttftSteps > 0)
-        speeds.push(`\u9996 token \u5E73\u5747 ${formatDurationWeb(stats.ttftMs / stats.ttftSteps)}`);
+        speeds.push(`First token avg ${formatDurationWeb(stats.ttftMs / stats.ttftSteps)}`);
     if (stats.decodeMs > 0)
         speeds.push(`${formatTokensPerSecond(stats.decodeTokens / (stats.decodeMs / 1e3))} tok/s`);
     if (speeds.length > 0)
@@ -97,17 +97,17 @@ export function renderStatsLine(stats) {
 export function renderStatsStrip(stats) {
     const lines = [];
     if (stats.steps > 0) {
-        lines.push(`\u{1F4CA} ${stats.turns} \u8F6E \u00B7 ${stats.steps} \u6B65`);
+        lines.push(`\u{1F4CA} ${stats.turns} turns \u00B7 ${stats.steps} steps`);
         const durations = [];
         if (stats.llmMs > 0)
             durations.push(`LLM ${formatDurationWeb(stats.llmMs)}`);
         if (stats.toolMs > 0)
-            durations.push(`\u5DE5\u5177\u8C03\u7528 ${formatDurationWeb(stats.toolMs)}`);
+            durations.push(`Tool time ${formatDurationWeb(stats.toolMs)}`);
         if (durations.length > 0)
             lines.push(`\u26A1 ${durations.join(" \u00B7 ")}`);
         const speeds = [];
         if (stats.ttftSteps > 0)
-            speeds.push(`\u9996 token \u5E73\u5747 ${formatDurationWeb(stats.ttftMs / stats.ttftSteps)}`);
+            speeds.push(`First token avg ${formatDurationWeb(stats.ttftMs / stats.ttftSteps)}`);
         if (stats.decodeMs > 0)
             speeds.push(`${formatTokensPerSecond(stats.decodeTokens / (stats.decodeMs / 1e3))} tok/s`);
         if (speeds.length > 0)
@@ -117,8 +117,8 @@ export function renderStatsStrip(stats) {
     if (billed > 0 || stats.outputTokens > 0) {
         const hit = billed === 0 ? null : Math.round((stats.cacheReadTokens / billed) * 100);
         if (hit !== null)
-            lines.push(`\u{1F4BE} \u7F13\u5B58\u547D\u4E2D ${hit}%`);
-        lines.push(`\u{1F4DD} \u8F93\u5165 ${formatTokensWeb(billed)} tok \u00B7 \u8F93\u51FA ${formatTokensWeb(stats.outputTokens)} tok`);
+            lines.push(`\u{1F4BE} Cache hit ${hit}%`);
+        lines.push(`\u{1F4DD} Input ${formatTokensWeb(billed)} tok \u00B7 Output ${formatTokensWeb(stats.outputTokens)} tok`);
     }
     return lines.length > 0 ? lines.join("\n") : undefined;
 }

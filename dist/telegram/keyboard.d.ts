@@ -34,12 +34,20 @@ export declare const ABORT_BTN = "\u23F9 Abort";
 /** Legacy bar label from older clients; still dispatches to abort. */
 export declare const STOP_BTN = "\u23F9 Stop";
 /** Collapses the whole bar to a single return button (more chat history visible). */
-export declare const COLLAPSE_BTN = "\uD83D\uDDDC\uFE0F \u6536\u8D77";
+export declare const COLLAPSE_BTN = "\uD83D\uDDDC\uFE0F Collapse";
 /** The one button left on a collapsed bar; tapping it restores the full bar. */
-export declare const RETURN_BTN = "\u8FD4\u56DE";
+export declare const RETURN_BTN = "\u21A9 Back";
 /** Stale client bars from earlier builds keep these labels working. */
 export declare const LEGACY_COLLAPSE_BTN = "\uD83D\uDE48 \u6536\u8D77";
 export declare const LEGACY_RETURN_BTN = "\uD83D\uDD19 \u8FD4\u56DE";
+/**
+ * Labels THIS plugin shipped before the English UI. Keyboards already rendered
+ * in a chat keep those texts, so a tap on them must still collapse/restore the
+ * bar instead of being delivered to the agent as a prompt. Escaped rather than
+ * literal so no source file carries CJK text (see the English-UI change).
+ */
+export declare const PREV_COLLAPSE_BTN = "\uD83D\uDDDC\uFE0F \u6536\u8D77";
+export declare const PREV_RETURN_BTN = "\u8FD4\u56DE";
 export declare const BAR_LABELS: readonly string[];
 /** Queue button label with a live count embedded (`⌛ Queue · 3`). */
 export declare function queueBarLabel(queueCount: number): string;
@@ -67,7 +75,7 @@ export declare function decodeCallbackValue(value: string): string;
  * `Goal · Queue · Compact` / `Todos · Abort`. `🧠 Reasoning` stays
  * reachable from the menu P1. Pass `queueCount`/`todoCount` for live counts.
  *
- * No in-bar 收起 button anymore: show/hide is the client's OWN input-row
+ * No in-bar collapse button anymore: show/hide is the client's OWN input-row
  * toggle (the ⊞ grid button) — one native tap, no bot round-trip. That ⊞
  * icon is only rendered in the API's DEFAULT keyboard mode: `is_persistent`
  * must stay FALSE (Bot API: "the custom keyboard can be hidden and opened
@@ -75,7 +83,7 @@ export declare function decodeCallbackValue(value: string): string;
  * keyboard permanently and they drop the ⊞ icon — once hidden, there is no
  * way back. `one_time_keyboard` stays false, so bar taps do NOT auto-close
  * it; `/bar off` keeps the explicit collapse for anyone who wants it; a
- * stale 收起 tap on an old rendered keyboard restores the fresh full bar. */
+ * stale collapse tap on an old rendered keyboard restores the fresh full bar. */
 export declare function buildBarKeyboard(queueCount?: number, todoCount?: number): Keyboard;
 /** Collapsed bar: only the return button, so the chat itself gets the screen. */
 export declare function buildCollapsedBarKeyboard(): Keyboard;

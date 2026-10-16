@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { attachRouter } from '../dist/telegram/router.js';
+import { COLLAPSE_BTN, PREV_COLLAPSE_BTN } from '../dist/telegram/keyboard.js';
 
 function fakeTransport() {
   let handlers;
@@ -133,7 +134,8 @@ test('bar buttons and callbacks run immediately instead of waiting behind a slow
   const h = t.handlers();
   const chatId = 71;
   const pendingTurn = h.onText(chatId, 'slow-turn');
-  const collapse = h.onText(chatId, '\u{1F5DC}\uFE0F \u6536\u8D77');
+  // A bar already rendered before the English UI still carries this label.
+  const collapse = h.onText(chatId, PREV_COLLAPSE_BTN);
   const goal = h.onCallback(chatId, 'm:goals');
   await new Promise((resolve) => setImmediate(resolve));
   const snapshot = [...calls];
@@ -141,7 +143,9 @@ test('bar buttons and callbacks run immediately instead of waiting behind a slow
   await pendingTurn;
   await collapse;
   await goal;
-  assert.deepEqual(snapshot, ['text:slow-turn', 'bar:\u{1F5DC}\uFE0F \u6536\u8D77', 'callback:m:goals']);
+  // The router reports the normalized (current) label, so a tap on the stale
+  // pre-English-UI keyboard still dispatches as the canonical collapse button.
+  assert.deepEqual(snapshot, ['text:slow-turn', `bar:${COLLAPSE_BTN}`, 'callback:m:goals']);
 });
 
 test('normal inbound text still stays FIFO behind a slow turn in the same chat', async () => {

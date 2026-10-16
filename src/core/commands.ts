@@ -165,7 +165,7 @@ export async function helpCommand(deps: DispatchDeps, c: CommandCall): Promise<v
         [
           "Commands:",
           "/new /compact /abort /stop /models /sessions /workspaces /project [path] /goals /skills /subagents /presets /plugins /hostsettings /credentials /host /jobs /status /menu",
-          "/history [sessionId] [turns] 轨迹 \u00B7 /rename <title> \u00B7 /fork [atSeq] \u00B7 /use <sessionId> \u00B7 /archive <sessionId>",
+          "/history [sessionId] [turns] Trajectory \u00B7 /rename <title> \u00B7 /fork [atSeq] \u00B7 /use <sessionId> \u00B7 /archive <sessionId>",
           "/queue \u00B7 /todo \u00B7 /steer <text> \u00B7 /cancel",
           "/goalcreate <objective> [maxRounds] \u00B7 /goaledit <text>",
           "/workspacecreate <path> [title] \u00B7 /workspacepin <workspaceId> <sessionId> [beforeSessionId]",
@@ -293,7 +293,7 @@ export async function barCommand(deps: DispatchDeps, c: CommandCall): Promise<vo
           ? true
           : state.barCollapsed.get(chatId) !== true;
       await setBarCollapsed(chatId, collapsed);
-      await send(collapsed ? "Bar hidden \u2014 use /bar or Menu \u2192 \u{1F4A1} \u663E\u793A Bar to restore." : "Bar shown.");
+      await send(collapsed ? "Bar hidden \u2014 use /bar or Menu \u2192 \u{1F4A1} Show Bar to restore." : "Bar shown.");
       return;
 }
 
@@ -426,7 +426,7 @@ export async function configCommand(deps: DispatchDeps, c: CommandCall): Promise
 
 /** /history — turn-grouped trajectory (issue #32). Two upgrades:
  * 1. No id and nothing bound no longer hard-fails — it falls back to the
- *    most recent session ("没有绑定id" after a bot restart left the command
+ *    most recent session ("none bound" after a bot restart left the command
  *    dead for the one use case that matters: catch up on the latest work).
  * 2. Plain `/history` opens the LIVE History card, which re-renders itself
  *    on every turn/end (hot reload) and carries Load older / Session nav.

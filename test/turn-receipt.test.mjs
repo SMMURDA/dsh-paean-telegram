@@ -16,10 +16,10 @@ test('turn receipt is ONE line with exactly the five user-facing metrics (#21)',
   });
   assert.equal(receipt.split('\n').length, 1);
   assert.match(receipt, /⏱️ 210s/);
-  assert.match(receipt, /🧠 11 次思考/);
-  assert.match(receipt, /🛠️ 15 次工具/);
-  assert.match(receipt, /📊 1 轮 · 13 步/);
-  assert.match(receipt, /💾 命中 44%/);
+  assert.match(receipt, /🧠 11 thoughts/);
+  assert.match(receipt, /🛠️ 15 tools/);
+  assert.match(receipt, /📊 1 turns · 13 steps/);
+  assert.match(receipt, /💾 Cache hit 44%/);
   assert.equal(receipt.includes('📥'), false, 'token billing is not user-facing');
   assert.equal(receipt.includes('📤'), false);
   assert.equal(receipt.includes('⚡'), false, 'performance segments are internal-only');
@@ -36,7 +36,7 @@ test('goal receipt keeps the goal prefix on the same single line', () => {
     goalObjective: 'ship the release',
     tokens: { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
   });
-  assert.equal(receipt, '✅ <b>ship the release</b> · ⏱️ 1380s · 🛠️ 3 次工具');
+  assert.equal(receipt, '✅ <b>ship the release</b> · ⏱️ 1380s · 🛠️ 3 tools');
 });
 
 test('cache hit is omitted when there is no billed input', () => {
@@ -45,5 +45,5 @@ test('cache hit is omitted when there is no billed input', () => {
     reasoningSteps: 2,
     tokens: { uncachedInputTokens: 0, outputTokens: 50, cacheReadTokens: 0, cacheWriteTokens: 0 },
   });
-  assert.equal(receipt, '⚙️ <b>完成</b> · ⏱️ 1s · 🧠 2 次思考');
+  assert.equal(receipt, '⚙️ <b>Completed</b> · ⏱️ 1s · 🧠 2 thoughts');
 });

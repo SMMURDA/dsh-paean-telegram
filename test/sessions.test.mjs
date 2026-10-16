@@ -329,7 +329,7 @@ test('groupSessionsByProject groups by workspace membership then cwd pseudo-proj
   assert.deepEqual(groups[0].sessions.map((session) => session.id), ['s1', 's5'], 'running sessions first');
   assert.equal(groups[1].label, 'beta');
   assert.equal(groups[2].label, 'beta (other)', 'same-basename pseudo projects are disambiguated');
-  assert.equal(groups[3].label, '未分组');
+  assert.equal(groups[3].label, 'Ungrouped');
 });
 
 test('orderProjectGroups ranks bound running, running, bound, recency, ungrouped', () => {
@@ -338,7 +338,7 @@ test('orderProjectGroups ranks bound running, running, bound, recency, ungrouped
     group('w-a', 'A', 0, 100, ['s-a']),
     group('w-b', 'B', 1, 50, ['s-b']),
     group('w-c', 'C', 1, 200, ['s-c']),
-    group(UNGROUPED_KEY, '未分组', 0, 400, ['s-u']),
+    group(UNGROUPED_KEY, 'Ungrouped', 0, 400, ['s-u']),
   ];
   const ordered = orderProjectGroups(groups, 's-b');
   assert.deepEqual(ordered.map((g) => g.key), ['w-b', 'w-c', 'w-a', UNGROUPED_KEY]);
@@ -668,7 +668,7 @@ test('searchSessions stops opening cold logs once the hit limit is full', async 
 });
 
 // ---------------------------------------------------------------------------
-// Review 四 (encodeSegment): the private encoder in session-lifecycle.ts
+// Review 4 (encodeSegment): the private encoder in session-lifecycle.ts
 // hand-mirrors the dsh JSONL persistence backend's path-segment encoder:
 // safe chars [A-Za-z0-9._-] kept verbatim, everything else escaped as `~XXXX`
 // uppercase hex, filesystem separator runs folded into one `~`, wrapped in

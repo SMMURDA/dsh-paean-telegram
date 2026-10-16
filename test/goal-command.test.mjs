@@ -99,7 +99,7 @@ test('/goal with no bound agent always sends a visible failure', async () => {
   const oldToken = process.env.TELEGRAM_BOT_TOKEN;
   const harness = await bootGoalHarness();
   try {
-    await harness.handlers.onText(7, '/goal 帮我调研一下');
+    await harness.handlers.onText(7, '/goal help me research this');
     const reply = harness.sends.find((entry) => entry.text.includes('No live agent'));
     assert.ok(reply, 'the command must answer instead of staying silent');
     assert.ok(reply.text.startsWith('\u274C'), 'missing agent is an error, not a neutral message');

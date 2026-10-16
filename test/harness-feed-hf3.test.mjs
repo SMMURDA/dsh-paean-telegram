@@ -140,8 +140,8 @@ for (const [label, reason] of failureShapes) {
     await settle();
 
     assert.ok(
-      !host.edits.some((e) => e.text.includes('\u5B8C\u6210')),
-      `${label} must not render the \u2699\uFE0F 完成 success receipt: ${JSON.stringify(host.edits.map((e) => e.text))}`,
+      !host.edits.some((e) => e.text.includes('Completed')),
+      `${label} must not render the \u2699\uFE0F Completed success receipt: ${JSON.stringify(host.edits.map((e) => e.text))}`,
     );
     assert.ok(!host.sends.some((s) => s.text.includes('\u2705')), 'no success goal receipt either');
   });
@@ -157,7 +157,7 @@ test('genuine completed turns keep the success receipt (HF-3 B control)', async 
   ctx.emit('agent-1', ev('turn/end', { turn: 1, reason: { kind: 'completed' } }));
   await settle();
   assert.ok(
-    host.edits.some((e) => e.messageId === activityId && e.text.includes('\u5B8C\u6210')),
+    host.edits.some((e) => e.messageId === activityId && e.text.includes('Completed')),
     `completed still collapses into the receipt: ${JSON.stringify(host.edits.map((e) => e.text))}`,
   );
 });
@@ -172,7 +172,7 @@ test('malformed turn/end without any reason keeps the legacy success shape (HF-3
   ctx.emit('agent-1', ev('turn/end', { turn: 1 }));
   await settle();
   assert.ok(
-    host.edits.some((e) => e.messageId === activityId && e.text.includes('\u5B8C\u6210')),
+    host.edits.some((e) => e.messageId === activityId && e.text.includes('Completed')),
     'missing reason is not evidence of failure',
   );
 });
@@ -190,7 +190,7 @@ test('aborted turn with no prose: no receipt, no empty notice, inbound left unan
   ctx.emit('agent-1', ev('turn/end', { turn: 1, reason: { kind: 'aborted', reason: { kind: 'legacy' } } }));
   await settle();
 
-  assert.ok(!host.edits.some((e) => e.text.includes('\u5B8C\u6210')), 'no success receipt on abort');
+  assert.ok(!host.edits.some((e) => e.text.includes('Completed')), 'no success receipt on abort');
   assert.ok(!host.edits.some((e) => e.text.includes('Empty response')), 'failed turns take no #33 empty notice');
   assert.ok(!host.sends.some((s) => s.text.includes('Empty response') || s.text.includes('telegram_reply')), 'the feed fabricates no outcome voice');
   assert.ok(host.deletes.some((d) => d.chatId === 7 && d.messageId === activityId), 'placeholder takes the quiet delete path');
@@ -231,9 +231,9 @@ test('liveFeed flipped off MID-turn: card settles, feed adds no second answer, n
   ctx.emit('agent-1', ev('turn/end', { turn: 1, reason: { kind: 'completed' } }));
   await settle();
 
-  // No zombie: the card collapsed to its receipt instead of staying "Working…"。
+  // No zombie: the card collapsed to its receipt instead of staying "Working…".
   const cardEdit = host.edits.filter((e) => e.messageId === activityId).at(-1);
-  assert.ok(cardEdit.text.includes('\u5B8C\u6210'), `card settled to a receipt: ${cardEdit.text}`);
+  assert.ok(cardEdit.text.includes('Completed'), `card settled to a receipt: ${cardEdit.text}`);
   assert.ok(!cardEdit.text.includes('Working'), 'no live header left behind');
   // Exactly one answer delivery: the core's — the feed adds nothing.
   assert.equal(host.sends.length, sendsBeforeFlip, 'no duplicate answer send while disabled');

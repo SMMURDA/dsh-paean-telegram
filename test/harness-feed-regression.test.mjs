@@ -191,7 +191,7 @@ test('#13: a failed in-place final edit degrades to the warning notice and leave
   // The activity card still collapses normally — ONLY the final answer lane degraded.
   const activityId = host.sends[0].id;
   assert.ok(
-    host.edits.some((e) => e.messageId === activityId && e.text.includes('\u5B8C\u6210')),
+    host.edits.some((e) => e.messageId === activityId && e.text.includes('Completed')),
     `the placeholder receipt still renders: ${JSON.stringify(host.edits.map((e) => e.text))}`,
   );
   assert.ok(!host.deletes.some((d) => d.messageId === answerId), 'the stale bubble is left in place, not silently retracted');
@@ -409,7 +409,7 @@ test('#26: a reasoning block containing a GFM table renders as an aligned <pre><
   ctx.emit('agent-1', ev('turn/end', { turn: 1, reason: { kind: 'completed' } }));
   await settle();
   const receipt = host.edits.filter((e) => e.messageId === activityId).at(-1);
-  assert.match(receipt.text, /\u{1F9E0} 1 \u6B21\u601D\u8003/u, 'the table burst still counts as one reasoning step');
+  assert.match(receipt.text, /\u{1F9E0} 1 thoughts/u, 'the table burst still counts as one reasoning step');
   // Deterministic teardown: kill timers/heartbeats while THIS test's timer
   // regime (real vs node:test mock) is still the installed one.
   ctx.disposeAll();
@@ -422,7 +422,7 @@ test('usage: usage chunks ACCUMULATE input/cache tokens into the receipt cache-h
   ctx.emit('agent-1', ev('turn/start', { turn: 1 }));
   emitReasoning(ctx, 'think');
   emitToolRound(ctx, 'c1');
-  // Two usage chunks: totals must SUM (last-write-wins would read 命中 50%).
+  // Two usage chunks: totals must SUM (last-write-wins would read Cache hit 50%).
   ctx.emit('agent-1', ev('assistant/chunk', { chunk: { type: 'usage', usage: { inputTokens: 100, outputTokens: 50, cacheReadTokens: 200, cacheWriteTokens: 0 } } }));
   ctx.emit('agent-1', ev('assistant/chunk', { chunk: { type: 'usage', usage: { inputTokens: 0, outputTokens: 25, cacheReadTokens: 100, cacheWriteTokens: 100 } } }));
   await sleep(1150);
@@ -435,7 +435,7 @@ test('usage: usage chunks ACCUMULATE input/cache tokens into the receipt cache-h
   // billed = 100 uncached + 200 read + 100 write = 500; cached = 300 -> 60%.
   assert.match(
     receipt.text,
-    /^\u2699\uFE0F (?:<b>)?\u5B8C\u6210(?:<\/b>)? \u00B7 \u23F1\uFE0F \d+s \u00B7 \u{1F9E0} 1 \u6B21\u601D\u8003 \u00B7 \u{1F6E0}\uFE0F 1 \u6B21\u5DE5\u5177 \u00B7 \u{1F4BE} \u547D\u4E2D 60%$/u,
+    /^\u2699\uFE0F (?:<b>)?Completed(?:<\/b>)? \u00B7 \u23F1\uFE0F \d+s \u00B7 \u{1F9E0} 1 thoughts \u00B7 \u{1F6E0}\uFE0F 1 tools \u00B7 \u{1F4BE} Cache hit 60%$/u,
     `accumulated hit rate on a single-line receipt: ${receipt.text}`,
   );
   // Deterministic teardown: kill timers/heartbeats while THIS test's timer
@@ -477,7 +477,7 @@ test('receipt: the collapse line carries the five user-facing metrics incl. sess
   // ONE line: header+duration · thoughts · tools · session stats head · cache hit.
   assert.match(
     receipt.text,
-    /^\u2699\uFE0F (?:<b>)?\u5B8C\u6210(?:<\/b>)? \u00B7 \u23F1\uFE0F \d+s \u00B7 \u{1F9E0} 1 \u6B21\u601D\u8003 \u00B7 \u{1F6E0}\uFE0F 1 \u6B21\u5DE5\u5177 \u00B7 \u{1F4CA} 3 \u8F6E \u00B7 7 \u6B65 \u00B7 \u{1F4BE} \u547D\u4E2D 80%$/u,
+    /^\u2699\uFE0F (?:<b>)?Completed(?:<\/b>)? \u00B7 \u23F1\uFE0F \d+s \u00B7 \u{1F9E0} 1 thoughts \u00B7 \u{1F6E0}\uFE0F 1 tools \u00B7 \u{1F4CA} 3 turns \u00B7 7 steps \u00B7 \u{1F4BE} Cache hit 80%$/u,
     `five-metric single-line receipt: ${receipt.text}`,
   );
   assert.ok(!receipt.text.includes('\n'), 'the receipt stays on one line');
@@ -557,7 +557,7 @@ test('#48/HF-3: after stopLiveFeed the draft goes dormant and a late real turn/e
   const settledAnswer = host.edits.filter((e) => e.messageId === answerId).at(-1);
   assert.ok(settledAnswer.text.includes('survives the abort'), `streamed prose settled in place: ${settledAnswer.text}`);
   assert.ok(
-    host.edits.some((e) => e.messageId === activityId && e.text.includes('\u5B8C\u6210')),
+    host.edits.some((e) => e.messageId === activityId && e.text.includes('Completed')),
     'activity card collapsed into the success receipt',
   );
   assert.equal(host.inboundMarks[7], 1, 'the late finalize satisfies the inbound exactly once');
@@ -614,8 +614,8 @@ test('interleave: two concurrent chats stream with zero cross-chat bleed (sessio
   await settle();
 
   assert.deepEqual(host.inboundMarks, { 7: 1, 8: 1 }, 'each chat settled its own inbound exactly once');
-  const receipt7 = host.edits.filter((e) => e.chatId === 7 && e.text.includes('\u5B8C\u6210'));
-  const receipt8 = host.edits.filter((e) => e.chatId === 8 && e.text.includes('\u5B8C\u6210'));
+  const receipt7 = host.edits.filter((e) => e.chatId === 7 && e.text.includes('Completed'));
+  const receipt8 = host.edits.filter((e) => e.chatId === 8 && e.text.includes('Completed'));
   assert.equal(receipt7.length, 1, 'chat 7 receipt on its own card');
   assert.equal(receipt8.length, 1, 'chat 8 receipt on its own card');
   assert.notEqual(receipt7[0].messageId, receipt8[0].messageId, 'receipts land on distinct per-chat cards');

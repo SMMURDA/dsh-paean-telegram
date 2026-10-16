@@ -2,7 +2,7 @@
  * Compact turn-receipt renderer, shared by the harness-feed streaming
  * extension and the core goal-progress card. The user contract: after a task
  * finishes, the activity card collapses into the one-line summary format,
- * including the cache hit rate (命中率) line.
+ * including the cache hit rate line.
  */
 import type { StatusStats } from "../harness/adapters/status.js";
 export interface TokenFold {

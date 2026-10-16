@@ -171,7 +171,7 @@ test('Back from a bar-opened card closes to chat; the same card from the menu re
   }
 });
 
-test('a stale 收起 tap restores the full bar (collapse left the bar; native ⊞ toggle owns show/hide)', async () => {
+test('a stale collapse tap restores the full bar (collapse left the bar; native ⊞ toggle owns show/hide)', async () => {
   const env = await setup();
   try {
     env.state.sends.length = 0;
@@ -180,7 +180,7 @@ test('a stale 收起 tap restores the full bar (collapse left the bar; native �
     await waitFor(() => env.state.sends.some((entry) => entry.text.startsWith('⌛ Queue')));
     const restored = env.state.sends.at(-1);
     assert.ok(restored.options.reply_markup !== undefined, 'full bar keyboard is (re)asserted');
-    assert.equal(env.state.sends.some((entry) => entry.text.includes('Bar 已收起')), false,
+    assert.equal(env.state.sends.some((entry) => entry.text.includes('Bar collapsed')), false,
       'the tap must never collapse the bar anymore');
 
     env.state.sends.length = 0;
@@ -243,7 +243,7 @@ test('a hanging card data service fails the card visibly after 10s (#20)', async
     await opening;
 
     assert.ok(
-      env.state.sends.some((entry) => entry.text.includes('❌ model catalog 加载失败')),
+      env.state.sends.some((entry) => entry.text.includes('❌ Failed to load model catalog')),
       'card load deadline reports a visible failure instead of wedging the UI lane',
     );
     assert.equal(env.state.sends.some((entry) => /Models · current/.test(entry.text)), false, 'no half-loaded card');
