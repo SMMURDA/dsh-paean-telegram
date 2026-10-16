@@ -1,0 +1,11 @@
+# Bundle patch untuk dsh-telegram.
+#
+# Berkas ini dirujuk oleh `dsh.bundle.patch` di package.json, tetapi tidak ikut
+# ter-commit di repo sumber (github.com/xqicxx/dsh-telegram). Isinya mengikuti
+# bentuk bundle Host biasa: satu baris insert yang memasang plugin ini.
+#
+# Konfigurasi plugin dibaca dari `<workspace>/.pi/telegram.json`, bukan dari
+# `config` baris ini, jadi tidak ada isi rahasia di sini.
+- insert:
+    - id: telegram
+      name: dsh-telegram

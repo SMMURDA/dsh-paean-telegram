@@ -1,0 +1,248 @@
+import { safeWrap } from "../telegram/safe.js";
+// ---------------------------------------------------------------------------
+// Typing keepalive + sticky turn flags
+// ---------------------------------------------------------------------------
+/** Per-chat typing refreshers: Telegram's "typing" action expires after ~5s,
+ * so long agent turns re-assert it every 4s until turn/end stops it. A hard
+ * cap clears a leaked loop when an agent is disposed without turn/end. */
+const typingLoops = new Map();
+/** Chats whose latest turn/start has not yet seen turn/end (issue #17). */
+const runningTurns = new Set();
+const TYPING_KEEPALIVE_MAX_MS = 10 * 60_000;
+/** Self-rearm budget (#48): a lost turn/end used to re-arm the keepalive
+ * forever. Three windows (30 min) per turn/start is generous; a genuinely
+ * running turn resets the budget whenever it re-asserts typing. */
+const TYPING_REARM_LIMIT = 3;
+const typingRearms = new Map();
+/** Keepalive decision (#48): a live agent's own status is authoritative —
+ * the sticky `runningTurns` flag goes stale when a turn/end event is lost,
+ * which used to re-arm the typing loop forever. The flag is only trusted
+ * when no live agent can answer, and the rearm budget caps that stale path.
+ * A genuinely running agent is never budget-killed: turns legitimately
+ * outlast a few windows, so the budget must not fire before the agent check. */
+export function typingKeepaliveActive(agentRunning, stickyRunning, rearmCount, rearmLimit = TYPING_REARM_LIMIT) {
+    if (agentRunning === true)
+        return true;
+    if (agentRunning === false)
+        return false;
+    if (rearmCount > rearmLimit)
+        return false;
+    return stickyRunning;
+}
+function turnStillRunning(chatId, deps) {
+    const agent = deps.currentAgent(chatId);
+    const agentRunning = agent === undefined ? undefined : agent.status === "running";
+    return typingKeepaliveActive(agentRunning, runningTurns.has(chatId), typingRearms.get(chatId) ?? 0);
+}
+function startTyping(chatId, deps) {
+    stopTyping(chatId);
+    const transport = deps.getTransport();
+    if (!transport)
+        return;
+    const fire = () => safeWrap(`typing(${chatId})`, () => transport.sendChatActionControl(chatId, "typing"), deps.log);
+    void fire();
+    const timer = setInterval(() => {
+        void fire();
+    }, 4000);
+    typingLoops.set(chatId, timer);
+    // Self-arming one-shot guard: if turn/end was lost the loop must still die.
+    // When the turn is genuinely still running, renew one more keep-alive
+    // window instead of silently dropping the typing indicator (#17) — but
+    // never beyond the rearm budget (#48).
+    typingRearms.set(chatId, (typingRearms.get(chatId) ?? 0) + 1);
+    const guard = setTimeout(() => {
+        if (typingLoops.get(chatId) !== timer)
+            return;
+        // A genuinely running turn RENEWS its budget instead of spending it (#48):
+        // the cap exists for the stale no-live-agent path, not to kill typing on
+        // a single turn that legitimately outlasts ~30-40 minutes.
+        const agent = deps.currentAgent(chatId);
+        if (agent?.status === "running")
+            typingRearms.delete(chatId);
+        if (turnStillRunning(chatId, deps))
+            startTyping(chatId, deps);
+        else
+            stopTyping(chatId);
+    }, TYPING_KEEPALIVE_MAX_MS);
+    // The guard is a leak safety net, not a lifecycle owner: unref it so a
+    // pending 10-minute window never keeps a process (or a test run) alive by
+    // itself — in production the polling socket keeps the loop alive anyway.
+    guard.unref?.();
+}
+function stopTyping(chatId) {
+    const timer = typingLoops.get(chatId);
+    if (timer !== undefined) {
+        clearInterval(timer);
+        typingLoops.delete(chatId);
+    }
+}
+/** Terminal cleanup for one chat's background loops (#48): Abort must kill
+ * the typing keepalive, the sticky turn flag, its rearm budget, and every
+ * live-feed timer — not just hide the UI. Kept verbatim from index.ts: an
+ * abort touches ONLY these four things (unlike disposeChat, it must not drop
+ * menu/pending/chain state, and unlike eject it must stop the live feed). */
+function abortChatLoops(chatId, deps) {
+    stopTyping(chatId);
+    runningTurns.delete(chatId);
+    typingRearms.delete(chatId);
+    deps.stopLiveFeed(chatId);
+}
+/** Bridge turn/start–turn/end seam: a genuine new turn gets a fresh
+ * keepalive budget (#48); turn/end stops typing and drops the sticky flag. */
+function setTurnRunning(chatId, running, deps) {
+    if (running) {
+        runningTurns.add(chatId);
+        typingRearms.delete(chatId);
+        startTyping(chatId, deps);
+    }
+    else {
+        runningTurns.delete(chatId);
+        typingRearms.delete(chatId);
+        stopTyping(chatId);
+    }
+}
+// ---------------------------------------------------------------------------
+// Menu page + card origin bookkeeping
+// ---------------------------------------------------------------------------
+/** Last menu page each chat had open, so Back/More land where the user was. */
+const menuPageIndex = new Map();
+/** Which entry point opened the current card: bar-opened cards close on Back,
+ * menu-opened cards return to the last menu page (issue #16). */
+const cardOrigins = new Map();
+// ---------------------------------------------------------------------------
+// Status subagent counts + todo snapshots
+// ---------------------------------------------------------------------------
+/** Live subagent counts per agent id. `subagents.listChildren` is async, so
+ * the Status card renders the latest snapshot and refreshAllPanels updates it
+ * before the next in-place edit. Agent-keyed (not chat-keyed): entries are
+ * dropped on session/disposed by core/events.ts, so disposeChat has no chat
+ * key to remove and only disposeAll clears the map wholesale. */
+const statusSubagentCounts = new Map();
+/** Latest durable todo snapshot per chat (todo/write is whole-list). */
+const todoSnapshots = new Map();
+// ---------------------------------------------------------------------------
+// Session-create serialization chains
+// ---------------------------------------------------------------------------
+/** Per-chat serialization for session creation. With router UI lanes, a
+ * first inbound message and a fast `✨ New` / model-select tap can run
+ * concurrently; this gate guarantees they still produce one session. The
+ * stored promise is already settled-shaped and removes itself, so dropping
+ * an entry never cancels an in-flight creation. */
+const sessionCreateChains = new Map();
+// ---------------------------------------------------------------------------
+// Pending prompt inputs (per-chat store, B-4r)
+// ---------------------------------------------------------------------------
+/** How long an armed free-text prompt stays valid (audit B-4r). Expiry is
+ * lazy — checked on the next take/cancel for that chat — so an abandoned
+ * flow can no longer hijack the chat's next ordinary message, and no timer
+ * bookkeeping is needed. */
+export const PENDING_INPUT_TTL_MS = 5 * 60_000;
+/** Per-chat pending inputs: at most one armed flow per chat (arming a new
+ * kind supersedes the old one instead of leaving both behind). */
+const pendingInputs = new Map();
+function hubNow(deps) {
+    return (deps.now ?? Date.now)();
+}
+/** Drop the entry when it has passed its TTL; absent and expired look
+ * identical to consumers ("no pending input"). */
+function livePending(chatId, deps) {
+    const input = pendingInputs.get(chatId);
+    if (input === undefined)
+        return undefined;
+    if (hubNow(deps) >= input.expiresAt) {
+        pendingInputs.delete(chatId);
+        return undefined;
+    }
+    return input;
+}
+/** Arm one pending input for this chat with a fresh TTL window. */
+function armPending(chatId, input, deps) {
+    pendingInputs.set(chatId, { ...input, expiresAt: hubNow(deps) + PENDING_INPUT_TTL_MS });
+}
+/** Consume this chat's armed input (lazily expiring it first); absent or
+ * expired → undefined, which callers treat exactly like "nothing armed".
+ * With `kind`, a non-matching entry stays armed instead of being swallowed
+ * (/subagentprompt must not eat an armed rename). */
+function takePending(chatId, kind, deps) {
+    const input = livePending(chatId, deps);
+    if (input === undefined)
+        return undefined;
+    if (kind !== undefined && input.kind !== kind)
+        return undefined;
+    pendingInputs.delete(chatId);
+    return input;
+}
+/** Cancel this chat's armed input whatever its kind; returns the removed
+ * input's kind so /cancel can name what it cancelled, or undefined. */
+function cancelPending(chatId, deps) {
+    return takePending(chatId, undefined, deps)?.kind;
+}
+/** Chats whose first touch was `/start` while unauthorized: once they tap
+ * Allow, replay the welcome instead of making them resend the command. */
+const pendingStartAfterAllow = new Set();
+// ---------------------------------------------------------------------------
+// Disposal trunk
+// ---------------------------------------------------------------------------
+/** Drop one chat's slice of every chat-keyed hub container: typing loop
+ * (clearTimer semantics), sticky turn flag, rearm budget, remembered menu
+ * page, card origin, session-create chain, the chat's armed pending input,
+ * the start-after-allow replay flag and the last todo snapshot.
+ * Deliberately NOT covered: the live-feed seam (eject must not touch it, see
+ * abortChatLoops) and the agent-keyed statusSubagentCounts (no chat key;
+ * dropped on session/disposed by core/events.ts). */
+function disposeChat(chatId) {
+    stopTyping(chatId);
+    runningTurns.delete(chatId);
+    typingRearms.delete(chatId);
+    menuPageIndex.delete(chatId);
+    cardOrigins.delete(chatId);
+    sessionCreateChains.delete(chatId);
+    pendingInputs.delete(chatId);
+    pendingStartAfterAllow.delete(chatId);
+    todoSnapshots.delete(chatId);
+}
+/** Reverse every hub-owned per-chat container (hot unplug / HMR / config
+ * restart). Timers get clearInterval, maps/sets clear wholesale, pending
+ * inputs drop with them. */
+function disposeAll() {
+    for (const timer of typingLoops.values())
+        clearInterval(timer);
+    typingLoops.clear();
+    runningTurns.clear();
+    // Stale rearm budgets must not survive a remount (#48): a same-chat long
+    // turn after hot reload would otherwise hit a budget it never spent.
+    typingRearms.clear();
+    menuPageIndex.clear();
+    cardOrigins.clear();
+    sessionCreateChains.clear();
+    pendingInputs.clear();
+    pendingStartAfterAllow.clear();
+    statusSubagentCounts.clear();
+    todoSnapshots.clear();
+}
+/** Build the per-chat lifecycle hub. Called once by index.ts; the returned
+ * functions and containers close over the shared deps like the previous
+ * module-scope closures did over index.ts singletons. Maps and Sets are
+ * returned by reference so destructured call sites keep mutating the hub's
+ * own state. */
+export function createChatHub(deps) {
+    return {
+        todoSnapshots,
+        statusSubagentCounts,
+        sessionCreateChains,
+        menuPageIndex,
+        cardOrigins,
+        pendingStartAfterAllow,
+        armPending: (chatId, input) => armPending(chatId, input, deps),
+        takePending: (chatId, kind) => takePending(chatId, kind, deps),
+        cancelPending: (chatId) => cancelPending(chatId, deps),
+        typingKeepaliveActive,
+        setTurnRunning: (chatId, running) => setTurnRunning(chatId, running, deps),
+        startTyping: (chatId) => startTyping(chatId, deps),
+        stopTyping,
+        abortChatLoops: (chatId) => abortChatLoops(chatId, deps),
+        disposeChat,
+        disposeAll,
+    };
+}
+//# sourceMappingURL=chat-hub.js.map

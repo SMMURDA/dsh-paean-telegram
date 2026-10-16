@@ -1,0 +1,22 @@
+node_modules/
+*.tgz
+.env
+.pi/
+coverage/
+.jspace/
+
+# Local bot token fallback (mountToken); keep 0600, never commit.
+/.telegram-token
+
+# dist/ IS tracked on purpose: a clone can be mounted without a TypeScript
+# toolchain. Refresh it with `npm run build`.
+
+# Upstream's internal development logs (Chinese-language) stay local and are
+# not part of this repository's documentation. They live in the upstream repo.
+/README.zh.md
+/TESTING.md
+/PLAN.md
+/progress.md
+/task_plan.md
+/findings.md
+/docs/

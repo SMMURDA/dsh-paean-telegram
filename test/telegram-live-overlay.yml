@@ -1,0 +1,17 @@
+# Live-test overlay: mounts dsh-telegram into the booted tree with polling
+# auto-started. No security override here so the persisted .pi/telegram.json
+# whitelist survives restarts.
+- id: agent-default-model
+  config:
+    provider: opencode-go
+    model: deepseek-v4-pro
+- insert:
+    - id: dsh-telegram
+      name: dsh-telegram
+      config:
+        watch:
+          autoStart: true
+    - id: telegram-reasoning
+      name: dsh-telegram/extensions/reasoning
+    - id: telegram-openclaw
+      name: dsh-telegram/extensions/openclaw

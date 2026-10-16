@@ -1,0 +1,171 @@
+/**
+ * Session display helpers: durable-title fallback chain, directory basename
+ * disambiguation, project grouping, and running-first ordering. Pure
+ * functions over plain data — no Context, no services, no I/O — so both the
+ * read queries (session-read.ts) and the Telegram cards can consume them
+ * without coupling to the host seams.
+ */
+/** Group key for sessions whose header carries no usable cwd. */
+export const UNGROUPED_KEY = "__ungrouped__";
+/** Directory display basename, matching web `workspaceTitleOf` semantics. */
+function pathBasename(path) {
+    return path.replace(/[/\\]+$/, "").split(/[/\\]/).pop() ?? "";
+}
+/** Web session-list display title: durable title → cwd basename → raw id. */
+export function displayTitleFor(title, cwd, id) {
+    if (title !== undefined && title.trim() !== "")
+        return title.trim();
+    if (cwd !== undefined && cwd !== "") {
+        const base = pathBasename(cwd);
+        if (base !== "")
+            return base;
+    }
+    return id;
+}
+/** Parent directory basename for same-basename pseudo-project disambiguation. */
+function parentBasename(path) {
+    const trimmed = path.replace(/[/\\]+$/, "");
+    const index = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+    if (index <= 0)
+        return "";
+    return pathBasename(trimmed.slice(0, index));
+}
+/**
+ * Path comparison key for project grouping: trailing separators folded.
+ * Pure and allocation-cheap — the workspace registry canonicalizes with
+ * realpath on its side, but grouping must stay synchronous over plain data,
+ * so exact-string equality (post-normalization) is the contract here; it is
+ * exactly the shape in which the bridge stamps session cwds
+ * (`workspace.activePath` flows into `meta.cwd` verbatim).
+ */
+function normalizePathKey(path) {
+    return path.replace(/[/\\]+$/, "");
+}
+/** Running sessions first, then most-recently-prompted, then stable id. */
+export function sortProjectSessions(details) {
+    return [...details].sort((a, b) => Number(b.running) - Number(a.running)
+        || (b.lastPromptAt ?? Number.NEGATIVE_INFINITY) - (a.lastPromptAt ?? Number.NEGATIVE_INFINITY)
+        || a.id.localeCompare(b.id));
+}
+/**
+ * Group sessions into project buckets. Real Workspaces keep their registry
+ * title and membership (`sessionIds`); every other session falls into a
+ * cwd-derived pseudo project (same basenames are disambiguated), and
+ * cwd-less sessions trail under {@link UNGROUPED_KEY}.
+ *
+ * Registry membership is advisory, never authoritative: the host registry
+ * folds new sessions in lazily (boot-time canonical-cwd reconciliation), so
+ * a freshly created session is routinely MISSING from `sessionIds` while its
+ * cwd already equals the workspace path. Falling straight through to a pseudo
+ * project used to split one project into two look-alike groups ("dsh-telegram"
+ * beside "dsh-telegram (cx)") and pushed every live session into the shadow
+ * copy — the reported "selected the project, but the session sits in
+ * 未分组". An unclaimed session whose cwd matches a known group path
+ * therefore joins THAT group instead of spawning a duplicate.
+ */
+export function groupSessionsByProject(details, workspaces) {
+    const groups = [];
+    const byWorkspaceId = new Map();
+    for (const workspace of workspaces) {
+        const label = workspace.title.trim() !== "" ? workspace.title : (pathBasename(workspace.path) || workspace.path);
+        const group = {
+            key: workspace.workspaceId,
+            label,
+            workspaceId: workspace.workspaceId,
+            path: workspace.path,
+            sessions: [],
+            runningCount: 0,
+            latestPromptAt: Number.NEGATIVE_INFINITY,
+        };
+        groups.push(group);
+        byWorkspaceId.set(workspace.workspaceId, group);
+    }
+    const ownedBySession = new Map();
+    for (const workspace of workspaces) {
+        const group = byWorkspaceId.get(workspace.workspaceId);
+        if (group === undefined)
+            continue;
+        for (const sessionId of workspace.sessionIds)
+            ownedBySession.set(String(sessionId), group);
+    }
+    /** Known group paths (normalized) → their group. Workspace groups seed it;
+     * each new pseudo project registers its own cwd so later sessions with the
+     * same cwd join it instead of forking yet another bucket. First registrant
+     * wins, keeping the map deterministic under duplicate paths. */
+    const byPath = new Map();
+    const registerPath = (path, group) => {
+        const key = normalizePathKey(path);
+        if (key !== "" && !byPath.has(key))
+            byPath.set(key, group);
+    };
+    for (const group of groups)
+        if (group.path !== undefined)
+            registerPath(group.path, group);
+    const usedLabels = new Set(groups.map((group) => group.label));
+    const pseudo = new Map();
+    for (const detail of details) {
+        let group = ownedBySession.get(detail.id);
+        const cwd = typeof detail.cwd === "string" ? detail.cwd : "";
+        if (group === undefined && cwd !== "") {
+            // Path match BEFORE pseudo creation: an unclaimed session inside a
+            // registered project directory belongs to that project's group.
+            group = byPath.get(normalizePathKey(cwd));
+        }
+        if (group === undefined) {
+            const key = cwd === "" ? UNGROUPED_KEY : cwd;
+            group = pseudo.get(key);
+            if (group === undefined) {
+                const base = cwd === "" ? "" : pathBasename(cwd);
+                let label = base === "" ? "\u672A\u5206\u7EC4" : base;
+                if (usedLabels.has(label)) {
+                    const parent = base === "" ? "" : parentBasename(cwd);
+                    label = parent === "" ? cwd : `${base} (${parent})`;
+                    if (usedLabels.has(label) && cwd !== "")
+                        label = cwd;
+                }
+                usedLabels.add(label);
+                group = {
+                    key,
+                    label,
+                    path: cwd === "" ? undefined : cwd,
+                    sessions: [],
+                    runningCount: 0,
+                    latestPromptAt: Number.NEGATIVE_INFINITY,
+                };
+                pseudo.set(key, group);
+            }
+            if (cwd !== "")
+                registerPath(cwd, group);
+        }
+        group.sessions.push(detail);
+    }
+    for (const group of [...groups, ...pseudo.values()]) {
+        group.sessions = sortProjectSessions(group.sessions);
+        group.runningCount = group.sessions.filter((session) => session.running).length;
+        group.latestPromptAt = group.sessions.reduce((latest, session) => Math.max(latest, session.lastPromptAt ?? Number.NEGATIVE_INFINITY), Number.NEGATIVE_INFINITY);
+    }
+    return [...groups, ...pseudo.values()];
+}
+/**
+ * Project display order: bound running project first, then running projects
+ * by recent activity, then the bound project, then everything else by recent
+ * activity; the cwd-less bucket is always last.
+ */
+export function orderProjectGroups(groups, boundSessionId) {
+    const rank = (group) => {
+        if (group.key === UNGROUPED_KEY)
+            return 4;
+        const bound = boundSessionId !== undefined && group.sessions.some((session) => session.id === boundSessionId);
+        if (bound && group.runningCount > 0)
+            return 0;
+        if (group.runningCount > 0)
+            return 1;
+        if (bound)
+            return 2;
+        return 3;
+    };
+    return [...groups].sort((a, b) => rank(a) - rank(b)
+        || b.latestPromptAt - a.latestPromptAt
+        || a.label.localeCompare(b.label));
+}
+//# sourceMappingURL=session-render.js.map

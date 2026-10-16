@@ -1,0 +1,530 @@
+/**
+ * Telegram Bot API access, following the official docs:
+ *
+ * - getUpdates long polling with `allowed_updates` narrowed to `message` and
+ *   `callback_query` so the bot never pays for update kinds it does not use;
+ * - HTML parse mode with all user content escaped upstream;
+ * - every outbound call flows through the per-chat serial + global rate-limit
+ *   queue, so the dsh agent loop is never blocked by network I/O.
+ */
+import { Bot, GrammyError, InputFile } from "grammy";
+import { splitText } from "./html.js";
+import { buildBarKeyboard } from "./keyboard.js";
+import { SendQueue, isRetryable } from "./queue.js";
+/** Bound one Bot API call: a hung connection must not wedge the send chain. */
+function withTimeout(promise, ms) {
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`telegram api timeout after ${ms}ms`)), ms);
+        promise.then((value) => { clearTimeout(timer); resolve(value); }, (err) => { clearTimeout(timer); reject(err); });
+    });
+}
+/** Bot API callback_query has no top-level `chat`; the chat lives on
+ * `callback_query.message.chat`. Extracted so a unit test can lock this —
+ * reading `callback.chat` silently dropped every inline tap (spinner stuck). */
+export function callbackUpdateChatId(callback) {
+    return callback.message?.chat?.id ?? callback.chat?.id;
+}
+export class TelegramTransport {
+    bot;
+    api;
+    queue;
+    maxMessageLength;
+    log;
+    sleep;
+    /** UI/control lane key: navigation cards, bar swaps and command acks must
+     * never queue behind assistant streaming edits (issues #11/#12). */
+    static controlKey(chatId) {
+        return `control:${chatId}`;
+    }
+    handlers;
+    me;
+    polling = false;
+    starting = false;
+    /** Bumped on every stop so a start that was awaiting an old generation
+     * can detect a stop that arrived while it was waiting. */
+    stopGeneration = 0;
+    pollAbort;
+    pollLoop;
+    /** Last confirmed update id; preserved across stop/start generations so a
+     * hot restart never asks Telegram to redeliver an already-seen batch. */
+    pollOffset = 0;
+    /** Consecutive 409 "terminated by other getUpdates" failures. The loop
+     * backs off instead of spamming and stops logging every single conflict. */
+    conflict409 = 0;
+    /** Consecutive non-409 polling failures (502/timeout/network). Same
+     * exponential backoff: the first failure logs, later ones stay quiet until
+     * one successful poll resets the meter. */
+    pollingErrors = 0;
+    constructor(options) {
+        this.bot = new Bot(options.token);
+        this.api = this.bot.api;
+        this.queue = options.queue ?? new SendQueue();
+        this.maxMessageLength = options.maxMessageLength ?? 4096;
+        this.log = options.log ?? ((m, e) => console.error(`[dsh-telegram] ${m}`, e ?? ""));
+        this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    }
+    setHandlers(handlers) {
+        this.handlers = handlers;
+    }
+    /** Hot-update rate limits and payload length without restarting polling. */
+    applyLimits(options) {
+        this.queue.configure({
+            ...(options.maxPerWindow === undefined ? {} : { maxPerWindow: options.maxPerWindow }),
+            ...(options.retry === undefined ? {} : { retry: options.retry }),
+        });
+        if (options.maxMessageLength !== undefined)
+            this.maxMessageLength = options.maxMessageLength;
+    }
+    /** Route one raw update through the registered handlers. Callbacks are
+     * answered first so the Telegram client stops showing the spinner. */
+    async handleUpdate(update) {
+        const entry = update;
+        if (!this.handlers)
+            return;
+        const message = entry.message;
+        if (message?.chat?.id !== undefined && typeof message.text === "string") {
+            this.log(`inbound text chatId=${message.chat.id} text=${JSON.stringify(message.text.slice(0, 80))}`);
+            await this.handlers.onText(message.chat.id, message.text, message.message_id);
+            return;
+        }
+        if (message?.chat?.id !== undefined && Array.isArray(message.photo) && message.photo.length > 0) {
+            const largest = message.photo[message.photo.length - 1];
+            await this.handlers.onPhoto(message.chat.id, largest.file_id, message.caption ?? "", message.message_id);
+            return;
+        }
+        if (message?.chat?.id !== undefined && this.handlers.onDocument !== undefined) {
+            if (message.document !== undefined) {
+                await this.handlers.onDocument(message.chat.id, "document", message.document.file_id ?? "", message.document.file_name ?? "document", message.document.mime_type ?? "", message.message_id);
+                return;
+            }
+            if (message.voice !== undefined) {
+                await this.handlers.onDocument(message.chat.id, "voice", message.voice.file_id ?? "", "voice message", message.voice.mime_type ?? "", message.message_id);
+                return;
+            }
+            if (message.video !== undefined) {
+                await this.handlers.onDocument(message.chat.id, "video", message.video.file_id ?? "", message.video.file_name ?? "video", message.video.mime_type ?? "", message.message_id);
+                return;
+            }
+        }
+        const callback = entry.callback_query;
+        if (callback !== undefined) {
+            // The chat lives on callback_query.message.chat — the callback_query
+            // object itself has no top-level `chat` (Bot API shape). Reading
+            // `callback.chat` here dropped every inline tap as `undefined`,
+            // which made all inline buttons feel dead/stuck.
+            const chatId = callbackUpdateChatId(callback);
+            // Answer first: the Telegram client keeps a spinner until the callback
+            // is acknowledged — without this every button feels dead.
+            await withTimeout(this.api.answerCallbackQuery(callback.id ?? ""), 15_000).catch((err) => this.log(`answerCallbackQuery FAILED err=${err instanceof Error ? err.message : String(err)}`, err));
+            if (callback.data === undefined || chatId === undefined) {
+                this.log(`callback dropped: chat=${chatId} data=${String(callback.data ?? "").slice(0, 64)}`);
+                return;
+            }
+            this.log(`inbound callback chatId=${chatId} data=${callback.data.slice(0, 64)}`);
+            await this.handlers.onCallback(chatId, callback.data);
+            return;
+        }
+    }
+    /** Route one photo batch (single or media group). Legacy single-photo
+     * consumers keep working when no `onPhotos` handler is mounted. */
+    async handlePhotos(chatId, photos, groupId) {
+        if (!this.handlers)
+            return;
+        const batch = photos.slice(0, 10);
+        if (this.handlers.onPhotos !== undefined) {
+            await this.handlers.onPhotos(chatId, batch, groupId);
+            return;
+        }
+        for (const photo of batch) {
+            await this.handlers.onPhoto(chatId, photo.fileId, photo.caption, photo.messageId);
+        }
+    }
+    /** Own getUpdates loop with per-call timeout and automatic reconnect:
+     * grammY's bot.start() silently dies on one network error (no way to
+     * observe it), which surfaced as the bot going mute. This loop never
+     * stops unless stop() is called.
+     *
+     * start/stop are restart-safe: starting aborts and awaits any previous
+     * generation first, so a hot re-apply can never have two in-flight
+     * getUpdates requests on the same bot token (the 409 "terminated by other
+     * getUpdates request" failure). */
+    async start() {
+        if (this.polling || this.starting)
+            return;
+        this.starting = true;
+        const generation = this.stopGeneration;
+        try {
+            const previousAbort = this.pollAbort;
+            previousAbort?.abort();
+            const previousLoop = this.pollLoop;
+            if (previousLoop)
+                await previousLoop.catch(() => { });
+            if (this.polling || this.stopGeneration !== generation)
+                return;
+            const abort = new AbortController();
+            this.pollAbort = abort;
+            this.polling = true;
+            this.pollLoop = (async () => {
+                while (this.polling && this.pollAbort === abort) {
+                    try {
+                        const updates = await withTimeout(
+                        // grammY re-exports an AbortSignal shim for older runtimes;
+                        // Node's native AbortController is compatible at runtime.
+                        this.api.getUpdates({ offset: this.pollOffset, timeout: 25, allowed_updates: ["message", "callback_query"] }, abort.signal), 40_000);
+                        // Media groups arrive as N message updates sharing one
+                        // media_group_id: route them as one ordered batch (issue #9).
+                        const groups = new Map();
+                        const batched = new Set();
+                        updates.forEach((update, index) => {
+                            const message = update.message;
+                            if (message?.chat?.id === undefined || !Array.isArray(message.photo) || message.photo.length === 0 || message.media_group_id === undefined)
+                                return;
+                            const key = `${message.chat.id}:${message.media_group_id}`;
+                            let group = groups.get(key);
+                            if (!group) {
+                                group = { chatId: message.chat.id, groupId: message.media_group_id, photos: [] };
+                                groups.set(key, group);
+                            }
+                            const largest = message.photo[message.photo.length - 1];
+                            group.photos.push({ fileId: largest.file_id, caption: message.caption ?? "", messageId: message.message_id });
+                            batched.add(index);
+                        });
+                        for (const group of groups.values()) {
+                            void this.handlePhotos(group.chatId, group.photos, group.groupId).catch((err) => this.log("photo batch handler failed", err));
+                        }
+                        updates.forEach((update, index) => {
+                            this.pollOffset = update.update_id + 1;
+                            if (batched.has(index))
+                                return;
+                            // Never let a slow handler block the poll loop: an agent turn can
+                            // take minutes, and a serial await would freeze inbound traffic
+                            // (the "bot went mute" failure).
+                            void this.handleUpdate(update).catch((err) => this.log("update handler failed", err));
+                        });
+                        this.conflict409 = 0;
+                        this.pollingErrors = 0;
+                    }
+                    catch (err) {
+                        if (abort.signal.aborted)
+                            return;
+                        const code = err?.error_code;
+                        if (code === 409) {
+                            this.conflict409 += 1;
+                            if (this.conflict409 === 1) {
+                                this.log("polling conflict: another bot instance is polling this token — this instance stays ready and retries quietly until it stops", err);
+                            }
+                            const delay = Math.min(30_000, 2000 * 2 ** Math.min(this.conflict409, 4));
+                            await this.sleep(delay);
+                        }
+                        else {
+                            this.conflict409 = 0;
+                            this.pollingErrors += 1;
+                            if (this.pollingErrors === 1) {
+                                this.log("polling error \u2014 backing off and retrying quietly until a poll succeeds", err);
+                            }
+                            const delay = Math.min(30_000, 2000 * 2 ** Math.min(Math.max(0, this.pollingErrors - 1), 4));
+                            await this.sleep(delay);
+                        }
+                    }
+                }
+            })();
+            this.log("long polling started");
+        }
+        finally {
+            this.starting = false;
+        }
+    }
+    /** Stop the current polling generation and wait for its in-flight request
+     * to settle so an immediate restart never overlaps getUpdates calls. */
+    async stop() {
+        if (!this.polling && this.pollAbort === undefined && !this.starting)
+            return;
+        this.stopGeneration += 1;
+        this.polling = false;
+        const abort = this.pollAbort;
+        abort?.abort();
+        const loop = this.pollLoop;
+        if (loop)
+            await loop.catch(() => { });
+        // A concurrent start() may have installed a new generation while this
+        // stop was awaiting the old loop; only clear what this call owned.
+        if (this.pollAbort === abort)
+            this.pollAbort = undefined;
+        if (this.pollLoop === loop)
+            this.pollLoop = undefined;
+    }
+    /** Download one photo through the Bot API file endpoint. Both the metadata
+     * call and the byte download are bounded: a hung connection must not wedge
+     * the chat's inbound lane forever. */
+    async downloadFile(fileId) {
+        const file = await withTimeout(this.api.getFile(fileId), 20_000).catch((err) => {
+            this.log("getFile failed", err);
+            return undefined;
+        });
+        if (!file?.file_path)
+            return undefined;
+        const url = `https://api.telegram.org/file/bot${this.bot.token}/${file.file_path}`;
+        const response = await fetch(url, { signal: AbortSignal.timeout(60_000) }).catch((err) => {
+            this.log("photo download failed", err);
+            return undefined;
+        });
+        if (!response?.ok)
+            return undefined;
+        return new Uint8Array(await response.arrayBuffer());
+    }
+    /** Shared body for the four binary-media senders below: identical queueing,
+     * timeout and HTML-caption handling — only the Bot API method differs.
+     * Called through the computed member access so grammY's Api keeps its
+     * receiver (the methods read `this.raw`). */
+    sendMedia(chatId, buffer, filename, caption, method) {
+        return this.queue.push(chatId, async () => {
+            const msg = await withTimeout(this.api[method](chatId, new InputFile(buffer, filename), {
+                ...(caption === undefined ? {} : { caption, parse_mode: "HTML" }),
+            }), 60_000);
+            this.noteSent(chatId, msg.message_id);
+            return msg.message_id;
+        });
+    }
+    /** Send a document (session-log ZIPs and other host artifacts). */
+    sendDocument(chatId, buffer, filename, caption) {
+        return this.sendMedia(chatId, buffer, filename, caption, "sendDocument");
+    }
+    /** Send saved image bytes back to the chat (session.attachment read-back). */
+    sendPhoto(chatId, buffer, filename, caption) {
+        return this.sendMedia(chatId, buffer, filename, caption, "sendPhoto");
+    }
+    /** Send an OGG/OPUS voice note (agent outbound attachments, issue #25). */
+    sendVoice(chatId, buffer, filename, caption) {
+        return this.sendMedia(chatId, buffer, filename, caption, "sendVoice");
+    }
+    /** Send an audio track (mp3/m4a/... — agent outbound attachments, #25). */
+    sendAudio(chatId, buffer, filename, caption) {
+        return this.sendMedia(chatId, buffer, filename, caption, "sendAudio");
+    }
+    /** Remove/replace an inline keyboard in place (approval/question settles). */
+    editReplyMarkup(chatId, messageId, markup) {
+        return this.queue.push(chatId, async () => {
+            try {
+                await withTimeout(this.api.editMessageReplyMarkup(chatId, messageId, { reply_markup: markup }), 20_000);
+                return true;
+            }
+            catch (err) {
+                // Retryable transients (429 flood-wait, 5xx, network) must REACH
+                // SendQueue so it can honor the server's retry_after (TR-1): turning
+                // a 429 into `false` here made panel settlement delete its own panel
+                // mid-flood instead of waiting the flood out on the same bubble.
+                if (isRetryable(err))
+                    throw err;
+                // Permanent failures (Telegram 4xx like "message is not modified" or
+                // "message to edit not found") keep the settled/false semantics.
+                if (err instanceof GrammyError)
+                    return false;
+                throw err;
+            }
+        });
+    }
+    /** Pending sends per chat + total — surfaced by the status card. */
+    pending() {
+        return this.queue.pendingCount();
+    }
+    async botInfo() {
+        if (!this.me) {
+            const info = await withTimeout(this.api.getMe(), 20_000).catch(() => undefined);
+            if (info)
+                this.me = { id: info.id, username: info.username };
+        }
+        return this.me;
+    }
+    async setCommands(commands) {
+        await withTimeout(this.api.setMyCommands(commands), 20_000).catch((err) => this.log("setMyCommands failed", err));
+    }
+    /** Telegram's native menu button (next to the input field) opens the bot
+     * command list in supported clients — a second, official entry point that
+     * does not depend on the persistent reply-keyboard bar. */
+    async setMenuButtonToCommands(chatId) {
+        await withTimeout(this.api.setChatMenuButton({ chat_id: chatId, menu_button: { type: "commands" } }), 20_000).catch((err) => this.log("setChatMenuButton failed", err));
+    }
+    /** Set the bot-WIDE default menu button to the commands type. Unlike the
+     * per-chat variant above, no chat_id means every chat (present and future)
+     * inherits it unless a per-chat override exists — so a fresh mount fixes
+     * the menu button everywhere without waiting for each chat's /start. */
+    async setDefaultMenuButtonToCommands() {
+        await withTimeout(this.api.setChatMenuButton({ menu_button: { type: "commands" } }), 20_000).catch((err) => this.log("setDefaultChatMenuButton failed", err));
+    }
+    /** Send one split text payload through the requested per-chat lane, with
+     * success/failure logged on every attempt so a dropped reply can never be
+     * silent again (#11). */
+    sendTextLane(chatId, text, options, lane) {
+        const parts = splitText(text, this.maxMessageLength);
+        const markup = options.reply_markup;
+        // Resume, not retry (audit RE-4): the queue re-INVOKES the queued callback
+        // on every transient-failure attempt, so progress counters must live out
+        // here — in the scope the callback closes over — or they would reset and
+        // parts already delivered would be sent again.
+        let first;
+        let last;
+        let sent = 0;
+        return this.queue.push(lane, async () => {
+            try {
+                for (let index = sent; index < parts.length; index += 1) {
+                    // Reply quoting and reply keyboards are per-message Telegram state:
+                    // only the FIRST part carries them; later parts must be plain text.
+                    const partOptions = index === 0 ? options : { ...options, reply_markup: undefined, reply_parameters: undefined };
+                    const msg = await withTimeout(this.api.sendMessage(chatId, parts[index], partOptions), 20_000);
+                    first ??= msg.message_id;
+                    last = msg.message_id;
+                    sent = index + 1;
+                }
+                this.noteSent(chatId, last ?? first);
+                this.log(`sendText ok chatId=${chatId} parts=${parts.length} reply_markup=${markup === undefined ? "null" : "set"}`);
+                return first;
+            }
+            catch (err) {
+                this.log(`sendText FAILED chatId=${chatId} text.len=${text.length} err=${err instanceof Error ? err.message : String(err)}`, err);
+                throw err;
+            }
+        });
+    }
+    /** Highest message id this transport has SENT to the chat. Telegram ids are
+     * one monotonic per-chat sequence shared by incoming and outgoing traffic,
+     * so the distance between an anchored card bubble and this hint lower-bounds
+     * how far downstream conversation has pushed it — the signal Ephemeral uses
+     * to re-anchor a card that edits "successfully" somewhere far off-screen
+     * (bar taps feeling dead while the card morphs above the viewport). */
+    lastSentIds = new Map();
+    noteSent(chatId, messageId) {
+        if (messageId === undefined)
+            return;
+        const previous = this.lastSentIds.get(chatId);
+        if (previous === undefined || messageId > previous)
+            this.lastSentIds.set(chatId, messageId);
+    }
+    lastOutgoingMessageId(chatId) {
+        return this.lastSentIds.get(chatId);
+    }
+    sendText(chatId, text, options = {}) {
+        return this.sendTextLane(chatId, text, options, chatId);
+    }
+    /** UI messages ride their own control lane so cards/acks stay responsive
+     * while assistant output streams (issues #11/#12, bar latency report). */
+    sendTextControl(chatId, text, options = {}) {
+        return this.sendTextLane(chatId, text, options, TelegramTransport.controlKey(chatId));
+    }
+    sendWithBar(chatId, text, options = {}) {
+        return this.sendText(chatId, text, { ...options, reply_markup: buildBarKeyboard() });
+    }
+    editTextLane(chatId, messageId, text, options, lane) {
+        // An overlong payload is a guaranteed non-retryable 400 ("message is too
+        // long"); fail fast BEFORE the API call instead of burning the attempt,
+        // the log noise and a queue slot. `false` shares the "card gone"
+        // semantics callers already handle with a fresh-send fallback (RE-7).
+        if (text.length > this.maxMessageLength) {
+            this.log(`editText skipped chatId=${chatId} messageId=${messageId} len=${text.length} > max=${this.maxMessageLength}`);
+            return Promise.resolve(false);
+        }
+        return this.queue.push(lane, async () => {
+            try {
+                await withTimeout(this.api.editMessageText(chatId, messageId, text, options), 20_000);
+                this.log(`editText ok chatId=${chatId} messageId=${messageId}`);
+                return true;
+            }
+            catch (err) {
+                // "message is not modified" means the message is alive and already
+                // shows the target content — that IS the desired end state, so the
+                // edit logically succeeded. Reporting false here made Ephemeral
+                // drop a perfectly good message id and re-send the card (#models
+                // card taps feeling dead). Classify BEFORE logging: this benign case
+                // must not pollute ERROR-level FAILED alerting (#49). Every other
+                // GrammyError stays a failure.
+                if (err instanceof GrammyError && /message is not modified/i.test(err.message)) {
+                    this.log(`editText noop chatId=${chatId} messageId=${messageId} (already up to date)`);
+                    return true;
+                }
+                this.log(`editText FAILED chatId=${chatId} messageId=${messageId} err=${err instanceof Error ? err.message : String(err)}`, err);
+                // Retryable transients must PROPAGATE out of the queued callback
+                // (TR-1): converting a 429 flood-wait into `false` made Ephemeral
+                // drop a live bubble id and send a fresh message mid-flood —
+                // amplifying the very flood that caused it, and made StatusPanel
+                // delete its panel. SendQueue re-invokes this callback honoring the
+                // server's retry_after; classification is the queue's OWN predicate,
+                // so what the lane swallows and what the queue retries can't drift.
+                // Per-attempt FAILED logging stays, mirroring sendTextLane (#11);
+                // the #49 not-modified noop above still classifies before any log.
+                if (isRetryable(err))
+                    throw err;
+                // Permanent failures keep the "card gone" `false` semantics callers
+                // already map to a fresh-send fallback (RE-7).
+                if (err instanceof GrammyError)
+                    return false;
+                throw err;
+            }
+        });
+    }
+    editText(chatId, messageId, text, options = {}) {
+        return this.editTextLane(chatId, messageId, text, options, chatId);
+    }
+    editTextControl(chatId, messageId, text, options = {}) {
+        return this.editTextLane(chatId, messageId, text, options, TelegramTransport.controlKey(chatId));
+    }
+    deleteMessageLane(chatId, messageId, lane) {
+        return this.queue.push(lane, async () => {
+            try {
+                await withTimeout(this.api.deleteMessage(chatId, messageId), 20_000);
+                this.log(`deleteMessage ok chatId=${chatId} messageId=${messageId}`);
+            }
+            catch (err) {
+                this.log(`deleteMessage FAILED chatId=${chatId} messageId=${messageId} err=${err instanceof Error ? err.message : String(err)}`, err);
+                throw err;
+            }
+        });
+    }
+    deleteMessage(chatId, messageId) {
+        return this.deleteMessageLane(chatId, messageId, chatId);
+    }
+    deleteMessageControl(chatId, messageId) {
+        return this.deleteMessageLane(chatId, messageId, TelegramTransport.controlKey(chatId));
+    }
+    sendChatAction(chatId, action) {
+        return this.sendChatActionLane(chatId, action, chatId);
+    }
+    sendChatActionControl(chatId, action) {
+        return this.sendChatActionLane(chatId, action, TelegramTransport.controlKey(chatId));
+    }
+    sendChatActionLane(chatId, action, lane) {
+        return this.queue.push(lane, async () => {
+            try {
+                await withTimeout(this.api.sendChatAction(chatId, action), 20_000);
+                this.log(`sendChatAction ok chatId=${chatId} action=${action}`);
+            }
+            catch (err) {
+                this.log(`sendChatAction FAILED chatId=${chatId} action=${action} err=${err instanceof Error ? err.message : String(err)}`, err);
+                throw err;
+            }
+        });
+    }
+    /** Last-resort raw Bot API send for critical command acks: if the queued
+     * grammY call exhausts retries, one direct HTTPS attempt still runs (#11). */
+    async sendTextFallback(chatId, text, options = {}) {
+        try {
+            const response = await fetch(`https://api.telegram.org/bot${this.bot.token}/sendMessage`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ chat_id: chatId, text, ...options }),
+                signal: AbortSignal.timeout(15_000),
+            });
+            const payload = (await response.json());
+            if (payload.ok !== true) {
+                this.log(`sendTextFallback FAILED chatId=${chatId} response=${response.status}`, payload);
+                return undefined;
+            }
+            this.log(`sendTextFallback ok chatId=${chatId} messageId=${payload.result?.message_id ?? "unknown"}`);
+            this.noteSent(chatId, payload.result?.message_id);
+            return payload.result?.message_id;
+        }
+        catch (err) {
+            this.log(`sendTextFallback FAILED chatId=${chatId} err=${err instanceof Error ? err.message : String(err)}`, err);
+            return undefined;
+        }
+    }
+}
+//# sourceMappingURL=transport.js.map

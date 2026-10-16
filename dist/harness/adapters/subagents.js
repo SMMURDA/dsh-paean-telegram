@@ -1,0 +1,119 @@
+import { SessionId } from "@deepseek-ai/dsh-session";
+import { fail, ok } from "./types.js";
+import { readHistory } from "./sessions.js";
+function subagentsOf(ctx) {
+    return ctx.get("subagents");
+}
+export async function listSubagents(ctx, parentSessionId) {
+    const subagents = subagentsOf(ctx);
+    if (!subagents)
+        return [];
+    // Web subagent.list reports `parentAvailable`: whether the parent session
+    // still has a live agent to address prompt/interrupt through.
+    const parentAvailable = ctx.agents?.get(SessionId(parentSessionId)) !== undefined;
+    try {
+        const entries = await subagents.listChildren(SessionId(parentSessionId));
+        return entries.map((entry) => ({
+            parentAvailable,
+            id: entry.id,
+            kind: entry.kind,
+            // Web api-proxy remaps every child row to the LIVE AGENT status at the
+            // host sampling boundary; the durable `entry.activity` snapshot is not
+            // what the browser catalog exposes.
+            activity: ctx.agents?.get(entry.id)?.status === "running" ? "running" : "inactive",
+            ...(entry.mode === undefined ? {} : { mode: entry.mode }),
+            ...(entry.label === undefined ? {} : { label: entry.label }),
+            ...(entry.hasChildren === undefined ? {} : { hasChildren: entry.hasChildren }),
+            ...(entry.kind === "diagnostic" ? { reason: entry.reason ?? "unavailable" } : {}),
+        }));
+    }
+    catch {
+        return [];
+    }
+}
+export function subagentHistory(ctx, childSessionId, limit = 20) {
+    return readHistory(ctx, childSessionId, limit);
+}
+export async function promptSubagent(ctx, parentSessionId, childSessionId, text, options) {
+    // RG-6: blank text would be delivered as [{ type: "text", text: "" }] — a
+    // wasted turn plus a false "delivered" impression in the parent session.
+    if (text.trim() === "")
+        return fail("subagent prompt must not be blank");
+    const subagents = subagentsOf(ctx);
+    if (!subagents)
+        return fail("subagents service is unavailable in this profile");
+    const parent = ctx.agents?.get(SessionId(parentSessionId));
+    if (!parent)
+        return fail(`parent session ${parentSessionId} has no live agent`);
+    // Web contract: only continuable child subagents accept prompts. Verify
+    // against the live catalog instead of trusting the caller.
+    let children;
+    try {
+        children = await subagents.listChildren(SessionId(parentSessionId));
+    }
+    catch (err) {
+        return fail(`subagent catalog is unavailable \u2014 cannot verify ${childSessionId} is continuable: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    const entry = children.find((candidate) => String(candidate.id) === childSessionId);
+    if (entry === undefined)
+        return fail(`subagent ${childSessionId} is not listed under parent ${parentSessionId}`);
+    if (entry.kind !== "child" || entry.mode !== "continuable") {
+        return fail("subagent-prompt-locked: only continuable child subagents accept prompts");
+    }
+    try {
+        const clientTimeZone = options?.clientTimeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+        // Always present (a live never-aborted signal when the caller supplies
+        // none) — the web contract hands followup a signal unconditionally, and
+        // test/subagents.test.mjs pins that shape.
+        const signal = options?.signal ?? new AbortController().signal;
+        const messageId = await subagents.followup(parent, SessionId(childSessionId), [{ type: "text", text }], {
+            source: { kind: "user", ...(clientTimeZone === undefined ? {} : { clientTimeZone }) },
+            signal,
+        });
+        return ok(`\u{1F4E8} Delivered to subagent ${childSessionId} (${String(messageId)})`);
+    }
+    catch (err) {
+        return fail(err instanceof Error ? err.message : String(err));
+    }
+}
+/** IA-1 #4 (audit: "interrupt 缺目录校验"): unlike promptSubagent, the
+ * interrupt path used to forward any id pair straight into
+ * subagents.interrupt with no target validation at all. Fail closed on
+ * every gap: blank/malformed ids, a parent without a live agent, a child
+ * not listed under that parent in the live catalog, and non-child
+ * (diagnostic) rows. Only a verified live child under the named parent is
+ * interruptible; continuable one-shot children stay interruptible because
+ * stopping them is exactly what interrupt is for. */
+export async function interruptSubagent(ctx, parentSessionId, childSessionId) {
+    if (parentSessionId.trim() === "" || childSessionId.trim() === "") {
+        return fail("subagent interrupt needs both a parent session id and a child session id");
+    }
+    const subagents = subagentsOf(ctx);
+    if (!subagents)
+        return fail("subagents service is unavailable in this profile");
+    const parent = ctx.agents?.get(SessionId(parentSessionId));
+    if (!parent)
+        return fail(`parent session ${parentSessionId} has no live agent`);
+    // Verify the child against the live catalog instead of trusting the
+    // callback payload: an unlisted or stale id must never reach interrupt.
+    let children;
+    try {
+        children = await subagents.listChildren(SessionId(parentSessionId));
+    }
+    catch (err) {
+        return fail(`subagent catalog is unavailable \u2014 cannot verify ${childSessionId} is interruptible: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    const entry = children.find((candidate) => String(candidate.id) === childSessionId);
+    if (entry === undefined)
+        return fail(`subagent ${childSessionId} is not listed under parent ${parentSessionId}`);
+    if (entry.kind !== "child")
+        return fail("subagent-interrupt-locked: only child subagents can be interrupted");
+    try {
+        subagents.interrupt(SessionId(childSessionId), { kind: "user", parentSessionId: SessionId(parentSessionId) });
+        return ok(`\u23F9 Interrupting ${childSessionId}\u2026`);
+    }
+    catch (err) {
+        return fail(err instanceof Error ? err.message : String(err));
+    }
+}
+//# sourceMappingURL=subagents.js.map
