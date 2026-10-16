@@ -1,7 +1,7 @@
 {
   "name": "dsh-telegram",
   "version": "0.4.0",
-  "description": "DeepSeek Harness plugin: a native Telegram bridge that lets humans chat with dsh agents, control sessions and manage the harness from a phone.",
+  "description": "Native Telegram bridge for DeepSeek Harness (DSH), built for the Paean Harness distribution: chat with dsh agents and manage sessions, models, workspaces and goals from a phone.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -38,6 +38,8 @@
     "prepublishOnly": "npm run check"
   },
   "keywords": [
+    "paean",
+    "paean-harness",
     "dsh-plugin",
     "dsh",
     "deepseek-harness",
