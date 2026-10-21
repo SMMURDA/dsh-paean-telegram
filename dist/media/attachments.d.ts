@@ -18,6 +18,15 @@ interface AttachmentStateSlice {
     /** Chat↔agent bridge (delivery + reverse lookups). Undefined while unmounted. */
     readonly bridge: Bridge | undefined;
 }
+/** Per-file outcome of one outbound upload. */
+export interface SendFileResult {
+    path: string;
+    ok: boolean;
+    method?: string;
+    messageId?: number | null;
+    bytes?: number;
+    error?: string;
+}
 export interface AttachmentHandlersDeps {
     state: AttachmentStateSlice;
     requireTransport(): TelegramTransport;
@@ -31,6 +40,18 @@ export interface AttachmentHandlersDeps {
     bindCreatedSession(chatId: number, agentId: string | undefined): boolean;
     scheduleBarSync(chatId: number, delayMs?: number): void;
 }
+/** Telegram's upload ceiling for one attachment (Bot API `sendDocument`).
+ * Exported so `media/image-refs.ts` can keep its mirrors honest in tests. */
+export declare const ATTACH_MAX_BYTES: number;
+/**
+ * Upload explicit workspace files to one chat.
+ *
+ * Shared by the `telegram_attach` tool, final-answer image delivery in the
+ * streaming renderer, AND the core forwarder that takes over when the live
+ * feed is disabled — so the workspace-escape guard, the size cap and the
+ * extension→method routing live in exactly one place.
+ */
+export declare function uploadWorkspaceFiles(transport: TelegramTransport, workspaceRoot: string, chatId: number, files: readonly string[], caption?: unknown): Promise<SendFileResult[]>;
 /** Build the outbound + inbound attachment handlers. Called once by index.ts;
  * every handler closes over the shared deps like the previous module-scope
  * closures did over index.ts singletons. */
@@ -48,5 +69,9 @@ export declare function makeAttachmentHandlers(deps: AttachmentHandlersDeps): {
         messageId?: number;
     }[]) => Promise<void>;
     dispatchDocument: (chatId: number, kind: "document" | "voice" | "video", fileId: string, name: string, mimeType: string, messageId?: number) => Promise<void>;
+    /** Upload explicit workspace files (shared by the tool and answer images). */
+    sendFilesToChat: (chatId: number, files: readonly string[], caption?: unknown) => Promise<{
+        results: SendFileResult[];
+    }>;
 };
 export {};

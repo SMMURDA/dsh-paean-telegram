@@ -18,7 +18,9 @@ import { plain } from "../telegram/html.js";
 /** Agent outbound attachments (issue #25): 1-10 workspace files, 50MB each,
  * routed to sendPhoto/sendVoice/sendAudio/sendDocument by file extension. */
 const ATTACH_MAX_COUNT = 10;
-const ATTACH_MAX_BYTES = 50 * 1024 * 1024;
+/** Telegram's upload ceiling for one attachment (Bot API `sendDocument`).
+ * Exported so `media/image-refs.ts` can keep its mirrors honest in tests. */
+export const ATTACH_MAX_BYTES = 50 * 1024 * 1024;
 /** Telegram photos (sendPhoto) cap at 10MB; larger jpg/jpeg/png must route
  * through sendDocument instead (RF-4 / AT-1 fix 2). */
 const ATTACH_PHOTO_MAX_BYTES = 10 * 1024 * 1024;
@@ -32,11 +34,87 @@ function attachExtension(filename) {
 function attachWithinWorkspace(root, target) {
     return target === root || target.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
 }
+/**
+ * Upload explicit workspace files to one chat.
+ *
+ * Shared by the `telegram_attach` tool, final-answer image delivery in the
+ * streaming renderer, AND the core forwarder that takes over when the live
+ * feed is disabled — so the workspace-escape guard, the size cap and the
+ * extension→method routing live in exactly one place.
+ */
+export async function uploadWorkspaceFiles(transport, workspaceRoot, chatId, files, caption) {
+    // RF-4 / AT-1 fix 1: normalize the workspace root once through realpath so
+    // symlink escapes are caught. On realpath failure we fall back to the plain
+    // resolved path (matching the previous behaviour) rather than refusing.
+    const resolvedRoot = resolve(workspaceRoot);
+    const root = await realpath(resolvedRoot).catch(() => resolvedRoot);
+    const results = [];
+    for (const rel of files) {
+        try {
+            const abs = resolve(root, rel);
+            // Resolve each candidate real path; a symlink pointing outside the
+            // workspace must be rejected. Fall back to the unresolved path on error.
+            const real = await realpath(abs).catch(() => abs);
+            if (!attachWithinWorkspace(root, real)) {
+                results.push({ path: rel, ok: false, error: "path resolves outside the workspace root (symlink escape)" });
+                continue;
+            }
+            const info = await stat(real);
+            if (!info.isFile()) {
+                results.push({ path: rel, ok: false, error: "not a file" });
+                continue;
+            }
+            if (info.size > ATTACH_MAX_BYTES) {
+                results.push({ path: rel, ok: false, error: `exceeds the ${ATTACH_MAX_BYTES / (1024 * 1024)}MB Telegram limit` });
+                continue;
+            }
+            const buffer = await readFile(real);
+            const filename = basename(abs);
+            const ext = attachExtension(filename);
+            const sendCaption = typeof caption === "string" && caption !== "" ? caption : undefined;
+            let method;
+            let messageId;
+            if (ATTACH_PHOTO_EXTENSIONS.has(ext) && info.size <= ATTACH_PHOTO_MAX_BYTES) {
+                method = "sendPhoto";
+                messageId = await transport.sendPhoto(chatId, buffer, filename, sendCaption);
+            }
+            else if (ATTACH_VOICE_EXTENSIONS.has(ext)) {
+                method = "sendVoice";
+                messageId = await transport.sendVoice(chatId, buffer, filename, sendCaption);
+            }
+            else if (ATTACH_AUDIO_EXTENSIONS.has(ext)) {
+                method = "sendAudio";
+                messageId = await transport.sendAudio(chatId, buffer, filename, sendCaption);
+            }
+            else {
+                // Includes jpg/jpeg/png over 10MB (sendPhoto would fail): route via
+                // sendDocument instead (AT-1 fix 2).
+                method = "sendDocument";
+                messageId = await transport.sendDocument(chatId, buffer, filename, sendCaption);
+            }
+            results.push({ path: rel, ok: messageId !== undefined, method, messageId: messageId ?? null, bytes: buffer.length });
+        }
+        catch (err) {
+            results.push({ path: rel, ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
+    }
+    return results;
+}
 /** Build the outbound + inbound attachment handlers. Called once by index.ts;
  * every handler closes over the shared deps like the previous module-scope
  * closures did over index.ts singletons. */
 export function makeAttachmentHandlers(deps) {
     const { state, requireTransport, requireCtx, uiSend, currentAgent, createSessionForChat, bindCreatedSession, scheduleBarSync } = deps;
+    /**
+     * Upload explicit workspace files to one chat.
+     *
+     * The `telegram_attach` tool and final-answer image delivery both go through
+     * here, so the workspace-escape guard, the size cap and the
+     * extension→method routing live in exactly one place.
+     */
+    async function sendFilesToChat(chatId, files, caption) {
+        return { results: await uploadWorkspaceFiles(requireTransport(), state.workspaceRoot, chatId, files, caption) };
+    }
     async function sendWorkspaceAttachments(args, exec) {
         const paths = Array.isArray(args.paths) ? args.paths.filter((entry) => typeof entry === "string") : [];
         if (!Array.isArray(args.paths))
@@ -55,62 +133,9 @@ export function makeAttachmentHandlers(deps) {
                     : "no bound Telegram chat context \u2014 pass chatId explicitly",
             });
         }
-        const t = requireTransport();
-        // RF-4 / AT-1 fix 1: normalize the workspace root once through realpath so
-        // symlink escapes are caught. On realpath failure we fall back to the plain
-        // resolved path (matching the previous behaviour) rather than refusing.
-        const resolvedRoot = resolve(state.workspaceRoot);
-        const root = await realpath(resolvedRoot).catch(() => resolvedRoot);
-        const results = [];
-        for (const rel of paths) {
-            try {
-                const abs = resolve(root, rel);
-                // Resolve each candidate real path; a symlink pointing outside the
-                // workspace must be rejected. Fall back to the unresolved path on error.
-                const real = await realpath(abs).catch(() => abs);
-                if (!attachWithinWorkspace(root, real)) {
-                    results.push({ path: rel, ok: false, error: "path resolves outside the workspace root (symlink escape)" });
-                    continue;
-                }
-                const info = await stat(real);
-                if (!info.isFile()) {
-                    results.push({ path: rel, ok: false, error: "not a file" });
-                    continue;
-                }
-                if (info.size > ATTACH_MAX_BYTES) {
-                    results.push({ path: rel, ok: false, error: `exceeds the ${ATTACH_MAX_BYTES / (1024 * 1024)}MB Telegram limit` });
-                    continue;
-                }
-                const buffer = await readFile(real);
-                const filename = basename(abs);
-                const ext = attachExtension(filename);
-                const caption = typeof args.caption === "string" && args.caption !== "" ? args.caption : undefined;
-                let method;
-                let messageId;
-                if (ATTACH_PHOTO_EXTENSIONS.has(ext) && info.size <= ATTACH_PHOTO_MAX_BYTES) {
-                    method = "sendPhoto";
-                    messageId = await t.sendPhoto(resolvedChat, buffer, filename, caption);
-                }
-                else if (ATTACH_VOICE_EXTENSIONS.has(ext)) {
-                    method = "sendVoice";
-                    messageId = await t.sendVoice(resolvedChat, buffer, filename, caption);
-                }
-                else if (ATTACH_AUDIO_EXTENSIONS.has(ext)) {
-                    method = "sendAudio";
-                    messageId = await t.sendAudio(resolvedChat, buffer, filename, caption);
-                }
-                else {
-                    // Includes jpg/jpeg/png over 10MB (sendPhoto would fail): route via
-                    // sendDocument instead (AT-1 fix 2).
-                    method = "sendDocument";
-                    messageId = await t.sendDocument(resolvedChat, buffer, filename, caption);
-                }
-                results.push({ path: rel, ok: messageId !== undefined, method, messageId: messageId ?? null, bytes: buffer.length });
-            }
-            catch (err) {
-                results.push({ path: rel, ok: false, error: err instanceof Error ? err.message : String(err) });
-            }
-        }
+        // Delegated: the upload loop (escape guard, size cap, format routing)
+        // lives in sendFilesToChat so final-answer images share it exactly.
+        const { results } = await sendFilesToChat(resolvedChat, paths, args.caption);
         return JSON.stringify({ ok: results.length > 0 && results.every((entry) => entry.ok), results });
     }
     /** Ensure this chat has a live agent for media delivery; first media starts
@@ -224,6 +249,6 @@ export function makeAttachmentHandlers(deps) {
         else
             scheduleBarSync(chatId, 0);
     }
-    return { sendWorkspaceAttachments, ensureChatAgent, dispatchPhoto, dispatchPhotos, dispatchDocument };
+    return { sendWorkspaceAttachments, sendFilesToChat, ensureChatAgent, dispatchPhoto, dispatchPhotos, dispatchDocument };
 }
 //# sourceMappingURL=attachments.js.map

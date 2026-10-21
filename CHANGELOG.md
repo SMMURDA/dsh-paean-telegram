@@ -5,6 +5,46 @@ Versioning follows the npm package version in `package.json`.
 
 ## Unreleased
 
+## 0.4.0 — 2026-10-21
+
+First tagged release of this fork. It bundles everything below (the 0.3.x line was never tagged),
+so a fresh clone and the Paean profile see the same behaviour.
+
+### Answer images arrive as photos, not as file paths
+
+- **A reply that referenced a workspace image showed only its path.** The model wrote
+  `![light theme](screenshots/01.png)`, Markdown→HTML had no image handling of its own, and the
+  bubble ended up carrying the literal file name while the picture stayed on disk — the operator
+  saw a filename where the screenshot should have been. New `media/image-refs.ts` extracts local
+  image references from the committed answer, the renderer uploads them, and the prose keeps only
+  its sentences.
+- **Both delivery owners are covered.** The streaming renderer (`extensions/harness-feed.ts`)
+  uploads after the answer settles, and the core forwarder used when `outbound.liveFeed` is off
+  does the same through the new `BridgeOptions.workspaceRoot` (`harness/bridge.ts`) — so the
+  behaviour does not silently disappear with the live feed.
+- **One upload implementation.** The per-file loop moved out of the tool handler into
+  `uploadWorkspaceFiles(transport, root, chatId, files)`, shared by `telegram_attach`, the
+  renderer and the core forwarder: the realpath symlink guard, the 50 MB cap, the
+  `png`/`jpg`/`jpeg` → `sendPhoto` routing and the >10 MB → `sendDocument` fallback stay identical
+  everywhere.
+- **Conservative by construction.** Only `png`/`jpg`/`jpeg` that really exist inside the workspace
+  root are uploaded (at most 10 per answer). Remote URLs, missing files, non-photo extensions,
+  files above the 50 MB upload ceiling and repeated spellings of one path (`a.png` vs `./a.png`,
+  deduped on the resolved path) are left in the text untouched or sent exactly once — nothing is
+  silently dropped — and an answer that is *only* an image sends the photo instead of the "turn
+  ended without a reply" reminder. A host without `sendLocalFiles` behaves exactly as before.
+- **Code is never rewritten.** A reference inside a fenced block or an inline code span is
+  documentation the model is showing, not a picture: it stays byte-for-byte and uploads nothing,
+  so an answer that demonstrates Markdown syntax cannot lose a line of its example or attach a
+  file nobody asked for. Removing a reference that hugged a sentence's closing punctuation also
+  drops the separating space (`… terang .` → `… terang.`).
+- **The async delivery cannot take the bridge down.** `deliverFinal` now awaits filesystem work,
+  so its rejection path is caught and logged explicitly instead of surfacing as an unhandled
+  rejection.
+- Tests: `test/answer-images.test.mjs` (extraction, code spans, the size ceiling mirror, shared
+  upload routing, the `sendLocalFiles` host seam) and `test/answer-images-bridge.test.mjs` (core
+  forwarder, no-root fallback, single-owner rule, images-only answers).
+
 ### `/answer` settles a text-only question in one step
 
 - **A question without options no longer waits for a Submit tap.** `/answer` used to only stage the

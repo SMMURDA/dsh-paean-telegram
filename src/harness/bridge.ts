@@ -18,6 +18,10 @@ import { resolveInboundMode, type TelegramConfig } from "../config.js";
 import { isReasoningEffort, reasoningDirective } from "../reasoning.js";
 import { noteToolCall } from "./adapters/status.js";
 import { markdownToHtml } from "../telegram/markdown.js";
+import { extractLocalImageRefs } from "../media/image-refs.js";
+// Single upload implementation: the attachment tool, the live-feed renderer and
+// this core forwarder all route workspace files through the same guarded path.
+import { uploadWorkspaceFiles } from "../media/attachments.js";
 import type { TelegramTransport } from "../telegram/transport.js";
 
 /** Prepend the configured reasoning directive (codex-telegram-bot semantics). */
@@ -70,6 +74,9 @@ export interface BridgeOptions {
   onStateChange: () => void;
   /** Turn lifecycle for chat indicators: running=true on turn/start, false on turn/end. */
   onTurnRunning?: (chatId: number, running: boolean) => void;
+  /** Active project root: images a prose reply references are resolved
+   * against it (and confined to it) before being uploaded. */
+  workspaceRoot?: () => string;
   /** Called after a final assistant text message landed, so the host can add
    * feedback buttons without the bridge knowing any Telegram keyboard UI. */
   onAssistantDelivered?: (chatId: number, telegramMessageId: number, sessionId: string, assistantMessageId: string) => void;
@@ -102,6 +109,7 @@ export class Bridge {
   private readonly getConfig: () => TelegramConfig;
   private readonly onStateChange: () => void;
   private readonly onTurnRunning: ((chatId: number, running: boolean) => void) | undefined;
+  private readonly workspaceRoot: (() => string) | undefined;
   private readonly onAssistantDelivered: ((chatId: number, telegramMessageId: number, sessionId: string, assistantMessageId: string) => void) | undefined;
   private readonly onBind: ((chatId: number, agentId: string | undefined) => void) | undefined;
   private readonly log: (message: string, error?: unknown) => void;
@@ -133,6 +141,7 @@ export class Bridge {
     this.getConfig = options.getConfig;
     this.onStateChange = options.onStateChange;
     this.onTurnRunning = options.onTurnRunning;
+    this.workspaceRoot = options.workspaceRoot;
     this.onAssistantDelivered = options.onAssistantDelivered;
     this.onBind = options.onBind;
     this.log = options.log;
@@ -403,6 +412,50 @@ export class Bridge {
     return this.getConfig().outbound.liveFeed !== false;
   }
 
+  /**
+   * Core forwarder (used when no live-feed renderer owns final delivery).
+   *
+   * Sends the prose, then uploads the workspace images that prose references —
+   * a Markdown `![](path)` must reach the chat as a real photo, never as a dead
+   * path. Extraction is best-effort: an unreadable file or a failed upload
+   * degrades to the text, which is still delivered exactly once.
+   */
+  private async deliverAssistantText(
+    chatId: number,
+    text: string,
+    assistantMessageId: string | undefined,
+    sessionId: string,
+  ): Promise<void> {
+    const root = this.workspaceRoot?.();
+    let prose = text;
+    let images: string[] = [];
+    if (root !== undefined) {
+      try {
+        const extracted = await extractLocalImageRefs(text, { workspaceRoot: root });
+        if (extracted.images.length > 0) {
+          prose = extracted.text;
+          images = extracted.images;
+        }
+      } catch {
+        images = [];
+      }
+    }
+    const body = prose.trim() === "" ? undefined : markdownToHtml(prose);
+    if (body !== undefined) {
+      const telegramMessageId = await this.transport.sendText(chatId, body, {
+        parse_mode: this.getConfig().outbound.parseMode,
+        ...this.replyParametersFor(chatId),
+      });
+      if (telegramMessageId !== undefined && assistantMessageId !== undefined) {
+        this.onAssistantDelivered?.(chatId, telegramMessageId, sessionId, assistantMessageId);
+      }
+    }
+    if (images.length > 0 && root !== undefined) {
+      const failed = (await uploadWorkspaceFiles(this.transport, root, chatId, images)).filter((result) => !result.ok);
+      if (failed.length > 0) this.log("assistant image delivery failed", failed);
+    }
+  }
+
   /** Stream-renderer plugin seam: when a consumer is registered the core
    * forwards assistant text blocks to it instead of the chat and defers the
    * inbound-answered bookkeeping to the consumer. No consumer = the built-in
@@ -495,17 +548,9 @@ export class Bridge {
               // A prose reply satisfies the inbound message: the turn/end
               // reminder must not fire when the agent answered normally.
               if (inbound) inbound.replied = true;
-              void this.transport
-                .sendText(chatId, markdownToHtml(text), {
-                  parse_mode: this.getConfig().outbound.parseMode,
-                  ...this.replyParametersFor(chatId),
-                })
-                .then((telegramMessageId) => {
-                  if (telegramMessageId !== undefined && messageId !== undefined) {
-                    this.onAssistantDelivered?.(chatId, telegramMessageId, String(session.id), messageId);
-                  }
-                })
-                .catch((err) => this.log("assistant reply failed", err));
+              void this.deliverAssistantText(chatId, text, messageId, String(session.id)).catch((err) =>
+                this.log("assistant reply failed", err),
+              );
             }
           }
         }

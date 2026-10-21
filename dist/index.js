@@ -278,6 +278,26 @@ function buildExtensionHost() {
     return {
         openCard,
         send: (chatId, text, options) => requireTransport().sendText(chatId, text, options),
+        // Final-answer images: the streaming renderer parses Markdown image refs out
+        // of the answer and hands the paths here, so a screenshot the model mentions
+        // arrives as a real photo instead of a dead path. Roster-gated like every
+        // other outbound path; failures are reported, never thrown.
+        sendLocalFiles: async (chatId, paths, caption) => {
+            if (!state.chats.has(chatId)) {
+                return { ok: false, delivered: 0, failed: paths.map((path) => ({ path, error: "chat is not in the allowed roster" })) };
+            }
+            try {
+                const { results } = await sendFilesToChat(chatId, paths, caption);
+                const delivered = results.filter((result) => result.ok).length;
+                const failed = results.filter((result) => !result.ok).map((result) => ({ path: result.path, error: result.error ?? "send failed" }));
+                return { ok: failed.length === 0 && delivered > 0, delivered, failed };
+            }
+            catch (err) {
+                const error = err instanceof Error ? err.message : String(err);
+                log(`sendLocalFiles failed chatId=${chatId} err=${error}`, err);
+                return { ok: false, delivered: 0, failed: paths.map((path) => ({ path, error })) };
+            }
+        },
         token,
         currentAgent,
         requireCtx,
@@ -837,7 +857,7 @@ const { dispatchToken, dispatchCallback, dispatchBarButton, dispatchCommand } = 
 // Outbound + inbound attachment handlers live in media/attachments.ts. This
 // is their single wiring point: the router callbacks below consume the
 // dispatch* names and the tool registration consumes sendWorkspaceAttachments.
-const { dispatchPhoto, dispatchPhotos, dispatchDocument, sendWorkspaceAttachments } = makeAttachmentHandlers({
+const { dispatchPhoto, dispatchPhotos, dispatchDocument, sendWorkspaceAttachments, sendFilesToChat } = makeAttachmentHandlers({
     state,
     requireTransport,
     requireCtx,
@@ -1138,6 +1158,9 @@ function constructMount(ctx, botToken) {
         // behind the debounce instead of sweeping all panels per event.
         onStateChange: schedulePanelRefresh,
         onTurnRunning: setTurnRunning,
+        // Answer images: the core forwarder (live feed off) resolves Markdown image
+        // refs against the workspace root, exactly like the streaming renderer.
+        workspaceRoot: () => state.workspaceRoot,
         // Durable chat→session bindings (core/chat-bindings.ts): without this a
         // restart unbound every chat — /history went "none bound" and a Models
         // tap auto-CREATED a session instead of switching in-session.

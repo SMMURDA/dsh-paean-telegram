@@ -74,6 +74,7 @@ import { renderTurnReceipt } from "../telegram/turn-receipt.js";
 // Shared heartbeat constant (telegram/goal-progress is the lower layer).
 import { LIVENESS_HEARTBEAT_MS } from "../telegram/goal-progress.js";
 import type { ExtensionHost } from "./types.js";
+import { extractLocalImageRefs } from "../media/image-refs.js";
 
 /** Visible activity rows (frozen think lines + tool rows); older rows scroll off. */
 const MAX_LINES = 8;
@@ -1208,8 +1209,56 @@ export function mountHarnessFeed(host: ExtensionHost, ctx: Context): void {
           ),
         );
       };
-      const deliverFinal = (streamedMessageId: number | undefined): void => {
-        const finalHtml = finalText.trim() !== "" ? markdownToHtml(finalText) : undefined;
+      const deliverFinal = async (streamedMessageId: number | undefined): Promise<void> => {
+        // Local image references (![](path)) become real photos: the prose keeps
+        // its meaning and the file stops being a dead path in the chat. Every
+        // step is best-effort — on any failure the original text renders as-is.
+        let renderText = finalText;
+        let answerImages: string[] = [];
+        try {
+          // Only strip the prose when this host can actually upload: a host
+          // without the seam must keep showing the reference (old behaviour)
+          // instead of losing it.
+          if (host.sendLocalFiles !== undefined) {
+            const extracted = await extractLocalImageRefs(finalText, { workspaceRoot: host.workspaceRoot() });
+            renderText = extracted.text;
+            answerImages = extracted.images;
+          }
+        } catch {
+          answerImages = [];
+        }
+        const deliverImages = (): void => {
+          const sendLocalFiles = host.sendLocalFiles;
+          if (answerImages.length === 0 || sendLocalFiles === undefined) return;
+          void safeWrap("harness-answer-images", async () => {
+            const outcome = await sendLocalFiles(chatId, answerImages);
+            if (outcome.failed.length > 0) {
+              console.error("[dsh-telegram] final-answer images failed", outcome.failed);
+            }
+          });
+        };
+        const settleWithImages = (telegramMessageId: number | undefined): void => {
+          settle(telegramMessageId);
+          deliverImages();
+        };
+        // The answer was nothing but image refs: send the photos instead of a
+        // reminder text, and count the inbound as answered. A host without the
+        // upload seam keeps the old behaviour (the reference renders as text),
+        // and a failed upload still says something rather than vanishing.
+        const imagesOnly = renderText.trim() === "" && answerImages.length > 0 && emptyNotice === undefined;
+        if (imagesOnly && host.sendLocalFiles !== undefined) {
+          const sendLocalFiles = host.sendLocalFiles;
+          void safeWrap("harness-answer-images-only", async () => {
+            const outcome = await sendLocalFiles(chatId, answerImages);
+            if (outcome.delivered === 0) {
+              console.error("[dsh-telegram] images-only answer delivered nothing", outcome.failed);
+              await host.send(chatId, markdownToHtml(finalText), { parse_mode: "HTML" });
+            }
+          });
+          if (host.pendingInbound(chatId)) host.markInboundReplied(chatId);
+          return;
+        }
+        const finalHtml = renderText.trim() !== "" ? markdownToHtml(renderText) : undefined;
         if (streamedMessageId !== undefined && finalHtml !== undefined) {
           if (finalHtml.length <= maxMessageLength(host)) {
             // Web semantics: the bubble that streamed settles into the
@@ -1221,7 +1270,7 @@ export function mountHarnessFeed(host: ExtensionHost, ctx: Context): void {
                 if (edited !== true) throw new Error("final edit failed");
                 return streamedMessageId;
               })
-              .then(settle)
+              .then(settleWithImages)
               .catch(failFinal);
             return;
           }
@@ -1245,7 +1294,7 @@ export function mountHarnessFeed(host: ExtensionHost, ctx: Context): void {
             if (telegramMessageId === undefined) throw new Error("transport returned no message id");
             return telegramMessageId;
           })
-            .then(settle)
+            .then(settleWithImages)
             .catch(failFinal);
           return;
         }
@@ -1261,14 +1310,24 @@ export function mountHarnessFeed(host: ExtensionHost, ctx: Context): void {
             if (telegramMessageId === undefined) throw new Error("transport returned no message id");
             return telegramMessageId;
           })
-          .then(settle)
+          .then(settleWithImages)
           .catch(failFinal);
       };
       // HF-2 B: an in-flight "…" answer send must LAND before settlement
       // picks its path — deciding from feed.answerId alone raced the send,
       // re-ran the fresh-send branch AND stranded the late placeholder
       // (mirrors the activity card's deferred finalize above).
-      void streamedAnswerId().then(deliverFinal);
+      // deliverFinal is async (image extraction awaits the filesystem): a throw
+      // outside its own `.then` chains must be logged, never left as an
+      // unhandled rejection that would take the whole bridge down.
+      void streamedAnswerId()
+        .then(deliverFinal)
+        .catch((err) => {
+          console.error(
+            "[dsh-telegram] harness-final-answer FAILED",
+            err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err),
+          );
+        });
     } else if (goal !== undefined && goalReceipt !== undefined && (host.getConfigPath?.("notify.onComplete") ?? true) !== false) {
       // Goal turns have no inbound answer; push a fresh receipt (issue #18).
       void safeWrap("harness-goal-completion", () =>

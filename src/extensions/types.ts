@@ -15,6 +15,14 @@ export interface ExtensionHost {
   openCard(chatId: number, text: string, keyboard?: unknown): Promise<void>;
   /** Send one plain message to a chat. */
   send(chatId: number, text: string, options?: Record<string, unknown>): Promise<number | undefined>;
+  /** Deliver workspace files the final answer references (images go out as
+   * photos) so a Markdown `![](path)` becomes a real picture in the chat.
+   * Best-effort: reports per-path outcomes instead of throwing. */
+  sendLocalFiles?(chatId: number, paths: readonly string[], caption?: string): Promise<{
+    ok: boolean;
+    delivered: number;
+    failed: { path: string; error: string }[];
+  }>;
   /** Mint a callback token carrying a payload (callback_data ≤ 64 bytes). */
   token(payload: Record<string, string>): string;
   /** The bridge-bound live agent, if any. */

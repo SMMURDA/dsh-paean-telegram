@@ -4,6 +4,10 @@ import { resolveInboundMode } from "../config.js";
 import { isReasoningEffort, reasoningDirective } from "../reasoning.js";
 import { noteToolCall } from "./adapters/status.js";
 import { markdownToHtml } from "../telegram/markdown.js";
+import { extractLocalImageRefs } from "../media/image-refs.js";
+// Single upload implementation: the attachment tool, the live-feed renderer and
+// this core forwarder all route workspace files through the same guarded path.
+import { uploadWorkspaceFiles } from "../media/attachments.js";
 /** Prepend the configured reasoning directive (codex-telegram-bot semantics). */
 function withReasoningDirective(config, text) {
     const effort = config.reasoning?.effort;
@@ -51,6 +55,7 @@ export class Bridge {
     getConfig;
     onStateChange;
     onTurnRunning;
+    workspaceRoot;
     onAssistantDelivered;
     onBind;
     log;
@@ -79,6 +84,7 @@ export class Bridge {
         this.getConfig = options.getConfig;
         this.onStateChange = options.onStateChange;
         this.onTurnRunning = options.onTurnRunning;
+        this.workspaceRoot = options.workspaceRoot;
         this.onAssistantDelivered = options.onAssistantDelivered;
         this.onBind = options.onBind;
         this.log = options.log;
@@ -334,6 +340,46 @@ export class Bridge {
     liveFeedEnabled() {
         return this.getConfig().outbound.liveFeed !== false;
     }
+    /**
+     * Core forwarder (used when no live-feed renderer owns final delivery).
+     *
+     * Sends the prose, then uploads the workspace images that prose references —
+     * a Markdown `![](path)` must reach the chat as a real photo, never as a dead
+     * path. Extraction is best-effort: an unreadable file or a failed upload
+     * degrades to the text, which is still delivered exactly once.
+     */
+    async deliverAssistantText(chatId, text, assistantMessageId, sessionId) {
+        const root = this.workspaceRoot?.();
+        let prose = text;
+        let images = [];
+        if (root !== undefined) {
+            try {
+                const extracted = await extractLocalImageRefs(text, { workspaceRoot: root });
+                if (extracted.images.length > 0) {
+                    prose = extracted.text;
+                    images = extracted.images;
+                }
+            }
+            catch {
+                images = [];
+            }
+        }
+        const body = prose.trim() === "" ? undefined : markdownToHtml(prose);
+        if (body !== undefined) {
+            const telegramMessageId = await this.transport.sendText(chatId, body, {
+                parse_mode: this.getConfig().outbound.parseMode,
+                ...this.replyParametersFor(chatId),
+            });
+            if (telegramMessageId !== undefined && assistantMessageId !== undefined) {
+                this.onAssistantDelivered?.(chatId, telegramMessageId, sessionId, assistantMessageId);
+            }
+        }
+        if (images.length > 0 && root !== undefined) {
+            const failed = (await uploadWorkspaceFiles(this.transport, root, chatId, images)).filter((result) => !result.ok);
+            if (failed.length > 0)
+                this.log("assistant image delivery failed", failed);
+        }
+    }
     /** Stream-renderer plugin seam: when a consumer is registered the core
      * forwards assistant text blocks to it instead of the chat and defers the
      * inbound-answered bookkeeping to the consumer. No consumer = the built-in
@@ -419,17 +465,7 @@ export class Bridge {
                         // reminder must not fire when the agent answered normally.
                         if (inbound)
                             inbound.replied = true;
-                        void this.transport
-                            .sendText(chatId, markdownToHtml(text), {
-                            parse_mode: this.getConfig().outbound.parseMode,
-                            ...this.replyParametersFor(chatId),
-                        })
-                            .then((telegramMessageId) => {
-                            if (telegramMessageId !== undefined && messageId !== undefined) {
-                                this.onAssistantDelivered?.(chatId, telegramMessageId, String(session.id), messageId);
-                            }
-                        })
-                            .catch((err) => this.log("assistant reply failed", err));
+                        void this.deliverAssistantText(chatId, text, messageId, String(session.id)).catch((err) => this.log("assistant reply failed", err));
                     }
                 }
             }

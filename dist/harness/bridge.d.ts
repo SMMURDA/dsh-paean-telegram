@@ -25,6 +25,9 @@ export interface BridgeOptions {
     onStateChange: () => void;
     /** Turn lifecycle for chat indicators: running=true on turn/start, false on turn/end. */
     onTurnRunning?: (chatId: number, running: boolean) => void;
+    /** Active project root: images a prose reply references are resolved
+     * against it (and confined to it) before being uploaded. */
+    workspaceRoot?: () => string;
     /** Called after a final assistant text message landed, so the host can add
      * feedback buttons without the bridge knowing any Telegram keyboard UI. */
     onAssistantDelivered?: (chatId: number, telegramMessageId: number, sessionId: string, assistantMessageId: string) => void;
@@ -49,6 +52,7 @@ export declare class Bridge {
     private readonly getConfig;
     private readonly onStateChange;
     private readonly onTurnRunning;
+    private readonly workspaceRoot;
     private readonly onAssistantDelivered;
     private readonly onBind;
     private readonly log;
@@ -144,6 +148,15 @@ export declare class Bridge {
      * plugins are ignored and the built-in immediate forwarding is restored
      * without unloading or re-registering the plugin. */
     private liveFeedEnabled;
+    /**
+     * Core forwarder (used when no live-feed renderer owns final delivery).
+     *
+     * Sends the prose, then uploads the workspace images that prose references —
+     * a Markdown `![](path)` must reach the chat as a real photo, never as a dead
+     * path. Extraction is best-effort: an unreadable file or a failed upload
+     * degrades to the text, which is still delivered exactly once.
+     */
+    private deliverAssistantText;
     /** Stream-renderer plugin seam: when a consumer is registered the core
      * forwards assistant text blocks to it instead of the chat and defers the
      * inbound-answered bookkeeping to the consumer. No consumer = the built-in

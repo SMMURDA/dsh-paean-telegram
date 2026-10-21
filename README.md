@@ -374,6 +374,15 @@ files under the workspace root.
 - **Documents / video** are saved to the same attachments directory with a read hint injected
   for the agent.
 - **Outbound files**: 1–10 files, ≤ 50 MB each, paths resolving inside the workspace root.
+- **Answer images**: when a reply references a workspace image in Markdown
+  (`![light theme](screenshots/01.png)`), the bridge uploads that file as a photo and removes the
+  reference from the prose — the screenshot appears in the chat instead of its path. This works
+  both in the streaming renderer and in the core forwarder used when `outbound.liveFeed` is off.
+  Only `png`/`jpg`/`jpeg` inside the workspace root qualify (symlinks are resolved first, and the
+  same file is sent once however it is spelled). A missing file, a non-photo extension, a remote
+  URL, a file above the 50 MB upload ceiling, or a reference inside a code fence / inline code
+  span is left in the text untouched — documentation is never rewritten and nothing is ever
+  silently dropped — and at most 10 images ride one answer.
 - Long assistant answers are split at Telegram's 4096-character payload cap.
 
 ## Approvals and questions
@@ -485,7 +494,7 @@ Relative to upstream `xqicxx/dsh-telegram` at `main`:
 3. **Context-usage reading** now looks at `agent.session` and accepts the settled
    `assistant/message` usage in addition to legacy stream chunks.
 4. **New regression suite** `test/runtime-compat.test.mjs` (9 tests) pinning the 0.2.x shapes;
-   the full suite is 695 tests, all passing.
+   the full suite is 738 tests, all passing.
 5. `dist/` is committed on purpose, so a clone can be mounted without a TypeScript toolchain;
    `npm run build` refreshes it.
 6. Upstream's internal development logs (Chinese-language `TESTING.md`, `PLAN.md`, `progress.md`,
@@ -499,6 +508,15 @@ Relative to upstream `xqicxx/dsh-telegram` at `main`:
    with a `readRaw` fallback.
 9. **dsh peer ranges widened** to `>=0.1.1-rc.2 <0.3.0` so the harness's compatibility gate passes
    on both the 0.1.x and 0.2.x generations without an exact-version exemption.
+10. **Answer images** (`src/media/image-refs.ts`): a prose reply that references a workspace image
+    (`![light theme](screenshots/01.png)`) uploads it as a photo and strips the reference from the
+    bubble, in both the streaming renderer and the core forwarder. Code fences, inline code,
+    remote URLs, missing files, non-photo extensions and files above the 50 MB ceiling are left
+    untouched; one shared `uploadWorkspaceFiles()` now backs `telegram_attach` and answer images
+    alike.
+11. **`/answer` settles a text-only question** in one step: staging the text and settling the
+    `ask_user_question` card happen in the same call, so a question without options no longer sits
+    pending until `⏹ Abort`. Option questions keep their Submit tap.
 
 The package version stays at `0.4.0` to remain aligned with the upstream release this fork tracks.
 
